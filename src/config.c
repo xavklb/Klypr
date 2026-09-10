@@ -5,8 +5,6 @@
 AppConfig g_config = {
     .gap_size = 8,
     .border_width = 2,
-    .border_radius = 10,
-    .terminal = L"wt.exe",
     .theme = THEME_SYSTEM,
     .opacity = 95
 };
@@ -74,14 +72,8 @@ bool config_init(void)
 
     g_config.gap_size = GetPrivateProfileIntW(L"General", L"gap_size", 8, s_ini_path);
     g_config.border_width = GetPrivateProfileIntW(L"General", L"border_width", 2, s_ini_path);
-    g_config.border_radius = GetPrivateProfileIntW(L"General", L"border_radius", 10, s_ini_path);
     g_config.opacity = GetPrivateProfileIntW(L"Theme", L"opacity", 95, s_ini_path);
 
-    GetPrivateProfileStringW(L"General", L"terminal", L"wt.exe", g_config.terminal, MAX_PATH - 1, s_ini_path);
-
-    if (g_config.gap_size < 0) g_config.gap_size = 0;
-    if (g_config.border_width < 0) g_config.border_width = 0;
-    if (g_config.border_radius < 0) g_config.border_radius = 0;
     if (g_config.opacity < 50) g_config.opacity = 50;
     if (g_config.opacity > 100) g_config.opacity = 100;
 
@@ -89,6 +81,7 @@ bool config_init(void)
     GetPrivateProfileStringW(L"Theme", L"theme", L"system", theme_buf, 63, s_ini_path);
     g_config.theme = config_string_to_theme(theme_buf);
 
+    // Save to create ini file if it doesn't exist yet
     config_save();
     return true;
 }
@@ -104,11 +97,6 @@ void config_save(void)
 
     _snwprintf(num_buf, 32, L"%d", g_config.border_width);
     WritePrivateProfileStringW(L"General", L"border_width", num_buf, s_ini_path);
-
-    _snwprintf(num_buf, 32, L"%d", g_config.border_radius);
-    WritePrivateProfileStringW(L"General", L"border_radius", num_buf, s_ini_path);
-
-    WritePrivateProfileStringW(L"General", L"terminal", g_config.terminal, s_ini_path);
 
     WritePrivateProfileStringW(L"Theme", L"theme", config_theme_to_string(g_config.theme), s_ini_path);
 

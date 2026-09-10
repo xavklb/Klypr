@@ -16,8 +16,6 @@ typedef enum {
 typedef struct {
     int gap_size;
     int border_width;
-    int border_radius;
-    wchar_t terminal[MAX_PATH];
     ThemeType theme;
     int opacity;
 } AppConfig;

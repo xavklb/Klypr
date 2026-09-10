@@ -24,10 +24,8 @@ static void CALLBACK winevent_proc(
 
     if (event == EVENT_OBJECT_SHOW) {
         if (window_is_manageable(hwnd)) {
-            window_add(hwnd);
         }
     } else if (event == EVENT_OBJECT_DESTROY) {
-        window_remove(hwnd);
     }
 }
 

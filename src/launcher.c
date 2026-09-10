@@ -129,6 +129,7 @@ static bool is_system_dark_theme(void)
 
 static void apply_window_blur(HWND hwnd, COLORREF bg_color, BYTE opacity, bool is_dark)
 {
+    // 1. DWM Window Attributes (Windows 11 modern rounded corners & acrylic backdrop)
     DWORD corner_pref = DWMWCP_ROUND;
     DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &corner_pref, sizeof(corner_pref));
 
@@ -138,6 +139,7 @@ static void apply_window_blur(HWND hwnd, COLORREF bg_color, BYTE opacity, bool i
     DWORD backdrop = DWMSBT_TRANSIENTWINDOW;
     DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop, sizeof(backdrop));
 
+    // 2. SetWindowCompositionAttribute (Acrylic blur for Windows 10 & 11)
     HMODULE user32 = GetModuleHandleW(L"user32.dll");
     if (user32 != NULL) {
         pfnSetWindowCompositionAttribute pSetWindowCompositionAttribute =
@@ -159,6 +161,7 @@ static void apply_window_blur(HWND hwnd, COLORREF bg_color, BYTE opacity, bool i
         }
     }
 
+    // 3. Layered Window Attributes (Alpha transparency)
     SetLayeredWindowAttributes(hwnd, 0, opacity, LWA_ALPHA);
 }
 
@@ -433,10 +436,12 @@ static void index_all_applications(void)
 {
     s_app_count = 0;
 
+    // 1. Add Theme Configuration Actions
     for (size_t i = 0; i < sizeof(s_theme_actions) / sizeof(s_theme_actions[0]); i++) {
         add_app_entry(s_theme_actions[i].name, s_theme_actions[i].target, s_theme_actions[i].desc, true);
     }
 
+    // 2. Start Menu shortcuts
     wchar_t prog_data[MAX_PATH];
     if (GetEnvironmentVariableW(L"ProgramData", prog_data, MAX_PATH) > 0) {
         wchar_t start_menu[MAX_PATH];
@@ -451,8 +456,10 @@ static void index_all_applications(void)
         scan_directory_for_shortcuts(user_start_menu);
     }
 
+    // 3. App Paths Registry
     scan_app_paths_registry();
 
+    // 4. Built-in system apps
     add_app_entry(L"Chrome", L"chrome", L"Navigateur Web", false);
     add_app_entry(L"Windows Terminal", L"wt.exe", L"Terminal", false);
     add_app_entry(L"Notepad", L"notepad.exe", L"Bloc-notes", false);
@@ -479,26 +486,31 @@ static bool is_likely_url(const wchar_t *str, wchar_t *out_url, size_t out_url_s
         return false;
     }
 
+    // A URL cannot contain spaces
     if (wcschr(str, L' ') != NULL || wcschr(str, L'\t') != NULL) {
         return false;
     }
 
+    // 1. Explicit http:// or https://
     if (wcs_starts_with_ci(str, L"http://") || wcs_starts_with_ci(str, L"https://")) {
         wcsncpy(out_url, str, out_url_size - 1);
         out_url[out_url_size - 1] = L'\0';
         return true;
     }
 
+    // 2. Starts with www.
     if (wcs_starts_with_ci(str, L"www.")) {
         _snwprintf(out_url, out_url_size, L"https://%s", str);
         return true;
     }
 
+    // 3. Starts with localhost
     if (wcs_starts_with_ci(str, L"localhost:") || _wcsicmp(str, L"localhost") == 0 || wcs_starts_with_ci(str, L"localhost/")) {
         _snwprintf(out_url, out_url_size, L"http://%s", str);
         return true;
     }
 
+    // 4. Domain / IP detection
     const wchar_t *first_slash = wcschr(str, L'/');
     const wchar_t *first_colon = wcschr(str, L':');
     const wchar_t *first_delim = first_slash;
@@ -581,6 +593,7 @@ static void filter_apps(const wchar_t *query)
         const wchar_t *name = s_apps[i].name;
         size_t nlen = wcslen(name);
 
+        // Check if query is targeting themes (e.g. "th", "theme", "dark", "light", etc.)
         if (s_apps[i].is_action) {
             if (wcs_contains_ci(name, query) || wcs_contains_ci(s_apps[i].desc, query)) {
                 score = 900 - (int)(nlen - qlen);
@@ -700,6 +713,7 @@ static void execute_command(const wchar_t *input)
         return;
     }
 
+    // Check if this is an internal theme switch action
     if (wcsncmp(input, L"__theme:", 8) == 0) {
         int theme_id = _wtoi(input + 8);
         config_set_theme((ThemeType)theme_id);
@@ -707,12 +721,14 @@ static void execute_command(const wchar_t *input)
         return;
     }
 
+    // Direct check if input is a web URL/link
     wchar_t normalized_url[MAX_PATH];
     if (is_likely_url(input, normalized_url, MAX_PATH)) {
         ShellExecuteW(NULL, L"open", normalized_url, NULL, NULL, SW_SHOWNORMAL);
         return;
     }
 
+    // Direct check for .lnk or explicit file path
     size_t in_len = wcslen(input);
     if (in_len > 4 && _wcsicmp(input + in_len - 4, L".lnk") == 0) {
         ShellExecuteW(NULL, L"open", input, NULL, NULL, SW_SHOWNORMAL);
@@ -764,11 +780,13 @@ static void execute_command(const wchar_t *input)
         }
     }
 
+    // 1. Direct ShellExecute
     HINSTANCE hInst = ShellExecuteW(NULL, L"open", cmd, params, NULL, SW_SHOWNORMAL);
     if ((INT_PTR)hInst > 32) {
         return;
     }
 
+    // 2. Try with .exe extension
     if (wcsstr(cmd, L".") == NULL) {
         wchar_t cmd_exe[MAX_PATH + 5];
         _snwprintf(cmd_exe, sizeof(cmd_exe) / sizeof(cmd_exe[0]), L"%s.exe", cmd);
@@ -778,6 +796,7 @@ static void execute_command(const wchar_t *input)
         }
     }
 
+    // 3. Fallback to cmd.exe /c start "" <command>
     wchar_t cmd_args[1024];
     _snwprintf(cmd_args, sizeof(cmd_args) / sizeof(cmd_args[0]), L"/c start \"\" %s", input);
     ShellExecuteW(NULL, L"open", L"cmd.exe", cmd_args, NULL, SW_HIDE);
@@ -902,24 +921,30 @@ static LRESULT CALLBACK launcher_wnd_proc(HWND hwnd, UINT uMsg, WPARAM wParam, L
         int w = client_rect.right - client_rect.left;
         int h = client_rect.bottom - client_rect.top;
 
+        // Double buffer for 100% flicker-free rendering
         HDC mem_dc = CreateCompatibleDC(hdc);
         HBITMAP mem_bmp = CreateCompatibleBitmap(hdc, w, h);
         HGDIOBJ old_bmp = SelectObject(mem_dc, mem_bmp);
 
+        // Fill background
         FillRect(mem_dc, &client_rect, s_bg_brush);
 
+        // Draw soft outer border
         HGDIOBJ old_pen = SelectObject(mem_dc, s_border_pen);
         HGDIOBJ old_brush = SelectObject(mem_dc, GetStockObject(HOLLOW_BRUSH));
         RoundRect(mem_dc, 0, 0, w, h, 16, 16);
         SelectObject(mem_dc, old_brush);
         SelectObject(mem_dc, old_pen);
 
+        // Draw prompt icon
         SetBkMode(mem_dc, TRANSPARENT);
         SetTextColor(mem_dc, s_current_theme.accent_color);
         HGDIOBJ old_font = SelectObject(mem_dc, s_font);
         TextOutW(mem_dc, 18, 16, s_current_theme.prompt_symbol, (int)wcslen(s_current_theme.prompt_symbol));
 
+        // Draw suggestion dropdown items if active
         if (s_match_count > 0) {
+            // Subtle separator line
             HPEN sep_pen = CreatePen(PS_SOLID, 1, s_current_theme.sep_color);
             HGDIOBJ prev_pen = SelectObject(mem_dc, sep_pen);
             MoveToEx(mem_dc, 16, BASE_HEIGHT - 2, NULL);
@@ -936,33 +961,41 @@ static LRESULT CALLBACK launcher_wnd_proc(HWND hwnd, UINT uMsg, WPARAM wParam, L
                 const wchar_t *desc = (app_idx == -1) ? s_url_entry.desc : s_apps[app_idx].desc;
 
                 if (i == s_selected_index) {
+                    // Modern rounded selection card/pill
                     HGDIOBJ prev_card_brush = SelectObject(mem_dc, s_card_brush);
                     HGDIOBJ null_pen = SelectObject(mem_dc, GetStockObject(NULL_PEN));
                     RoundRect(mem_dc, 10, item_top, w - 10, item_bottom, 10, 10);
 
+                    // Left accent indicator bar
                     RECT bar_rect = { 12, item_top + 6, 16, item_bottom - 6 };
                     FillRect(mem_dc, &bar_rect, s_accent_brush);
 
                     SelectObject(mem_dc, null_pen);
                     SelectObject(mem_dc, prev_card_brush);
 
+                    // Indicator arrow
                     SetTextColor(mem_dc, s_current_theme.accent_color);
                     TextOutW(mem_dc, 26, item_top + 9, L"\u279c", 1);
 
+                    // Primary name
                     SetTextColor(mem_dc, s_current_theme.text_primary);
                     TextOutW(mem_dc, 50, item_top + 9, name, (int)wcslen(name));
 
+                    // Secondary description on right
                     SetTextColor(mem_dc, s_current_theme.accent_color);
                     SIZE desc_size;
                     GetTextExtentPoint32W(mem_dc, desc, (int)wcslen(desc), &desc_size);
                     TextOutW(mem_dc, w - 24 - desc_size.cx, item_top + 9, desc, (int)wcslen(desc));
                 } else {
+                    // Unselected item bullet
                     SetTextColor(mem_dc, s_current_theme.text_secondary);
                     TextOutW(mem_dc, 28, item_top + 9, L"\u00b7", 1);
 
+                    // Primary name
                     SetTextColor(mem_dc, s_current_theme.text_primary);
                     TextOutW(mem_dc, 50, item_top + 9, name, (int)wcslen(name));
 
+                    // Secondary description on right
                     SetTextColor(mem_dc, s_current_theme.text_secondary);
                     SIZE desc_size;
                     GetTextExtentPoint32W(mem_dc, desc, (int)wcslen(desc), &desc_size);
@@ -973,6 +1006,7 @@ static LRESULT CALLBACK launcher_wnd_proc(HWND hwnd, UINT uMsg, WPARAM wParam, L
 
         SelectObject(mem_dc, old_font);
 
+        // Blit buffer to window
         BitBlt(hdc, 0, 0, w, h, mem_dc, 0, 0, SRCCOPY);
 
         SelectObject(mem_dc, old_bmp);
@@ -1084,8 +1118,10 @@ bool launcher_init(HINSTANCE hInstance)
         (LONG_PTR)edit_subclass_proc
     );
 
+    // Index all applications and themes
     index_all_applications();
 
+    // Apply active theme and backdrop blur
     launcher_apply_theme();
 
     s_is_visible = false;
@@ -1138,6 +1174,7 @@ void launcher_show(void)
     s_match_count = 0;
     s_selected_index = 0;
 
+    // Refresh theme in case system dark/light mode changed
     if (g_config.theme == THEME_SYSTEM) {
         launcher_apply_theme();
     }
@@ -1159,6 +1196,7 @@ void launcher_show(void)
 
     SetWindowTextW(s_hwnd_edit, L"");
 
+    // Seamlessly attach thread input to guarantee foreground rights & instant keyboard focus
     HWND hwnd_fore = GetForegroundWindow();
     DWORD fore_thread = hwnd_fore ? GetWindowThreadProcessId(hwnd_fore, NULL) : 0;
     DWORD cur_thread = GetCurrentThreadId();
@@ -1212,11 +1250,4 @@ bool launcher_is_visible(void)
 HWND launcher_get_hwnd(void)
 {
     return s_hwnd_launcher;
-}
-
-void launcher_execute(const wchar_t *cmd)
-{
-    if (cmd != NULL && cmd[0] != L'\0') {
-        execute_command(cmd);
-    }
 }

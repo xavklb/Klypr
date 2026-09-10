@@ -1,12 +1,10 @@
 #include "input.h"
 #include "app.h"
-#include "config.h"
 #include "launcher.h"
-#include "window.h"
 #include <windows.h>
+#include <shellapi.h>
 
 static HHOOK s_keyboard_hook = NULL;
-static HHOOK s_mouse_hook = NULL;
 
 static LRESULT CALLBACK keyboard_proc(int nCode, WPARAM wParam, LPARAM lParam)
 {
@@ -24,65 +22,30 @@ static LRESULT CALLBACK keyboard_proc(int nCode, WPARAM wParam, LPARAM lParam)
             return 1;
         }
 
-        if (alt_down && shift_down && !ctrl_down && (kb->vkCode == 'Q' || kb->vkCode == 'q')) {
+        if (alt_down && !shift_down && kb->vkCode == VK_RETURN) {
+            ShellExecuteW(NULL, L"open", L"wt.exe", NULL, NULL, SW_SHOWNORMAL);
+            return 1;
+        }
+
+        if (alt_down && shift_down && (kb->vkCode == 'Q' || kb->vkCode == 'q')) {
             app_stop();
             return 1;
-        }
-
-        if (alt_down && !shift_down && !ctrl_down && (kb->vkCode == 'Q' || kb->vkCode == 'q')) {
-            window_close_active();
-            return 1;
-        }
-
-        if (alt_down && !shift_down && !ctrl_down && kb->vkCode == VK_RETURN) {
-            launcher_execute(g_config.terminal);
-            return 1;
-        }
-
-        if (alt_down && !shift_down && !ctrl_down) {
-            if (kb->vkCode >= '1' && kb->vkCode <= '9') {
-                workspace_switch(kb->vkCode - '1');
-                return 1;
-            }
-            if (kb->vkCode >= VK_NUMPAD1 && kb->vkCode <= VK_NUMPAD9) {
-                workspace_switch(kb->vkCode - VK_NUMPAD1);
-                return 1;
-            }
         }
     }
 
     return CallNextHookEx(s_keyboard_hook, nCode, wParam, lParam);
 }
 
-static LRESULT CALLBACK mouse_proc(int nCode, WPARAM wParam, LPARAM lParam)
-{
-    if (nCode == HC_ACTION && wParam == WM_MOUSEMOVE) {
-        MSLLHOOKSTRUCT *ms = (MSLLHOOKSTRUCT *)lParam;
-        window_focus_under_cursor(ms->pt);
-    }
-
-    return CallNextHookEx(s_mouse_hook, nCode, wParam, lParam);
-}
-
 bool input_init(void)
 {
-    HINSTANCE hInst = GetModuleHandleW(NULL);
-
     s_keyboard_hook = SetWindowsHookExW(
         WH_KEYBOARD_LL,
         keyboard_proc,
-        hInst,
+        GetModuleHandleW(NULL),
         0
     );
 
-    s_mouse_hook = SetWindowsHookExW(
-        WH_MOUSE_LL,
-        mouse_proc,
-        hInst,
-        0
-    );
-
-    return (s_keyboard_hook != NULL) && (s_mouse_hook != NULL);
+    return s_keyboard_hook != NULL;
 }
 
 void input_cleanup(void)
@@ -90,10 +53,5 @@ void input_cleanup(void)
     if (s_keyboard_hook != NULL) {
         UnhookWindowsHookEx(s_keyboard_hook);
         s_keyboard_hook = NULL;
-    }
-
-    if (s_mouse_hook != NULL) {
-        UnhookWindowsHookEx(s_mouse_hook);
-        s_mouse_hook = NULL;
     }
 }
