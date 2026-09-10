@@ -893,7 +893,13 @@ static LRESULT CALLBACK launcher_wnd_proc(HWND hwnd, UINT uMsg, WPARAM wParam, L
 
     case WM_LBUTTONDOWN: {
         int y = HIWORD(lParam);
-        if (y >= BASE_HEIGHT && s_match_count > 0) {
+        if (y < BASE_HEIGHT) {
+            if (s_hwnd_edit != NULL) {
+                SetFocus(s_hwnd_edit);
+            }
+            return 0;
+        }
+        if (s_match_count > 0) {
             int clicked = (y - BASE_HEIGHT - 4) / ITEM_HEIGHT;
             if (clicked >= 0 && clicked < s_match_count) {
                 int app_idx = s_matches[clicked].app_index;
@@ -1022,6 +1028,17 @@ static LRESULT CALLBACK launcher_wnd_proc(HWND hwnd, UINT uMsg, WPARAM wParam, L
     case WM_ACTIVATE: {
         if (LOWORD(wParam) == WA_INACTIVE) {
             launcher_hide();
+        } else {
+            if (s_hwnd_edit != NULL) {
+                SetFocus(s_hwnd_edit);
+            }
+        }
+        return 0;
+    }
+
+    case WM_SETFOCUS: {
+        if (s_hwnd_edit != NULL) {
+            SetFocus(s_hwnd_edit);
         }
         return 0;
     }
@@ -1178,9 +1195,28 @@ void launcher_show(void)
     );
 
     SetWindowTextW(s_hwnd_edit, L"");
+
+    // Seamlessly attach thread input to guarantee foreground rights & instant keyboard focus
+    HWND hwnd_fore = GetForegroundWindow();
+    DWORD fore_thread = hwnd_fore ? GetWindowThreadProcessId(hwnd_fore, NULL) : 0;
+    DWORD cur_thread = GetCurrentThreadId();
+
+    if (fore_thread != 0 && fore_thread != cur_thread) {
+        AttachThreadInput(cur_thread, fore_thread, TRUE);
+    }
+
     ShowWindow(s_hwnd_launcher, SW_SHOW);
+    BringWindowToTop(s_hwnd_launcher);
     SetForegroundWindow(s_hwnd_launcher);
+    SetActiveWindow(s_hwnd_launcher);
     SetFocus(s_hwnd_edit);
+
+    if (fore_thread != 0 && fore_thread != cur_thread) {
+        AttachThreadInput(cur_thread, fore_thread, FALSE);
+    }
+
+    SendMessageW(s_hwnd_edit, EM_SETSEL, 0, 0);
+
     s_is_visible = true;
 }
 
