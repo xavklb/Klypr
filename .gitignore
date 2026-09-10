@@ -1,0 +1,8 @@
+build/
+bin/
+obj/
+*.o
+*.obj
+.vs/
+.vscode/
+klypr.exe
