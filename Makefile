@@ -7,6 +7,7 @@ SRC = src/main.c \
       src/config.c \
       src/event.c \
       src/input.c \
+      src/launcher.c \
       src/layout.c \
       src/window.c
 

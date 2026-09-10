@@ -1,8 +1,13 @@
 #include "window.h"
+#include "launcher.h"
 
 bool window_is_manageable(HWND hwnd)
 {
     if (hwnd == NULL || !IsWindow(hwnd)) {
+        return false;
+    }
+
+    if (hwnd == launcher_get_hwnd()) {
         return false;
     }
 

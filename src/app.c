@@ -3,6 +3,7 @@
 #include "input.h"
 #include "event.h"
 #include "window.h"
+#include "launcher.h"
 #include <windows.h>
 
 static bool s_running = false;
@@ -13,13 +14,20 @@ bool app_init(void)
         return false;
     }
 
+    if (!launcher_init(GetModuleHandleW(NULL))) {
+        config_cleanup();
+        return false;
+    }
+
     if (!input_init()) {
+        launcher_cleanup();
         config_cleanup();
         return false;
     }
 
     if (!event_init()) {
         input_cleanup();
+        launcher_cleanup();
         config_cleanup();
         return false;
     }
@@ -47,6 +55,7 @@ void app_cleanup(void)
     s_running = false;
     event_cleanup();
     input_cleanup();
+    launcher_cleanup();
     config_cleanup();
 }
 
