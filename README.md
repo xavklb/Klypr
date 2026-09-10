@@ -6,17 +6,92 @@ Conçu pour une productivité maximale au clavier, il offre un design moderne tr
 
 ---
 
+## Raccourcis Clavier Principaux
+
+| Raccourci | Action |
+|---|---|
+| `Ctrl` + `A` | **Afficher / Masquer** la barre de lancement rapide |
+| `Alt` + `Entrée` | **Ouvrir le terminal** (configurable via `klypr.ini`, repli automatique intelligent) |
+| `Alt` + `Shift` + `Q` | **Quitter** proprement Klypr |
+| `Tab` | **Compléter** la commande ou l'alias sélectionné dans la barre de recherche |
+| `Haut` / `Bas` | **Naviguer** dans les résultats de recherche |
+| `Entrée` | **Valider** et exécuter l'action, l'application ou l'alias sélectionné |
+| `Échap` | **Fermer** la barre du lanceur |
+
+---
+
 ## Fonctionnalités
 
-- **Recherche & Indexation instantanée** : détection automatique des applications installées (Menu Démarrer, registre `App Paths`, commandes système courantes).
-- **Navigation & URLs directes** : saisie directe d'adresses web ou de commandes système.
-- **Thèmes & Personnalisation** : support de plusieurs thèmes intégrés (`system`, `dark`, `light`, `cyberpunk`, `dracula`) et opacité réglable via fichier INI (`klypr.ini`) ou directement dans le lanceur.
-- **Lancement au démarrage** : synchronisation automatique avec le démarrage de Windows (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`), configurable dans `klypr.ini` ou via la barre.
-- **Contrôle au clavier** : interception globale via des hooks Windows de bas niveau.
-- **Raccourcis par défaut** :
-  - `Ctrl` + `A` : Afficher / masquer la barre de lancement rapide.
-  - `Alt` + `Entrée` : Lancer le terminal Windows (`wt.exe`).
-  - `Alt` + `Shift` + `Q` : Quitter Klypr proprement.
+### 1. Recherche & Indexation instantanée
+- Détection automatique et temps réel des applications installées (Menu Démarrer utilisateur et système, registre Windows `App Paths`, commandes système courantes).
+- Saisie et ouverture directe d'adresses web (`http://`, `https://`, domaines `.com`, `.fr`...) ou de fichiers et dossiers locaux.
+
+### 2. Système d'Alias Intelligent & Suggestions de Cibles
+- **Gestion directe au clavier dans le lanceur :**
+  - Tapez `:alias` pour afficher la liste de vos alias et les commandes disponibles.
+  - Tapez `:alias <nom> <cible>` (ou `alias <nom> <cible>`) pour créer ou modifier un alias.
+  - Tapez `:alias del <nom>` pour supprimer un alias existant.
+- **Suggestions dynamiques de cibles :**
+  - Dès la saisie de `:alias <nom> `, Klypr propose automatiquement les applications populaires installées.
+  - Dès la frappe d'un début de cible (ex: `:alias nav chr`), Klypr filtre en temps réel les applications installées correspondantes (`Google Chrome`), les exécutables cibles (`chrome.exe`), les dossiers et les URLs web.
+- **Complétion avec `Tab` :**
+  - Appuyez sur `Tab` pour insérer la commande complète d'alias (`:alias <nom> <cible>`) dans le champ de saisie avant de valider.
+- **Arguments dynamiques (`%s`) :**
+  - Possibilité d'utiliser `%s` dans la cible pour injecter des paramètres (ex: recherche web `g = https://google.com/search?q=%s`).
+  - Taper `g programmation c` dans Klypr effectue directement la recherche web encodée dans votre navigateur par défaut.
+
+### 3. Lancement Rapide du Terminal
+- Raccourci global `Alt` + `Entrée` géré nativement via l'API noyau `RegisterHotKey` (aucun conflit, réactivité instantanée).
+- Configurable dans `klypr.ini` via la clé `terminal` (ex: `wt.exe`, `powershell.exe`, `cmd.exe`, `bash.exe`...).
+- Chaîne de repli automatique robuste :
+  `terminal défini` ➔ `Windows Terminal (wt.exe)` ➔ `Package Windows Terminal AppX` ➔ `PowerShell` ➔ `CMD`.
+
+### 4. Thèmes & Effets Visuels
+- 5 thèmes intégrés :
+  - **Système (Auto)** : s'adapte automatiquement au mode sombre / clair de Windows.
+  - **Fluent Dark** : design sombre moderne translucide.
+  - **Fluent Light** : design clair moderne translucide.
+  - **Cyberpunk** : style terminal hacker vert néon sur fond sombre.
+  - **Dracula** : thème violet et cyan pour développeurs.
+- Effet Acrylic / Mica avec double-buffering GDI (rendu fluide et sans aucun scintillement).
+- Changement de thème directement depuis le lanceur en tapant `thème`.
+
+### 5. Lancement au Démarrage
+- Synchronisation native avec le registre Windows (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`).
+- Activé par défaut, désactivable via `klypr.ini` ou directement en tapant `démarrage` dans Klypr.
+
+---
+
+## Configuration (`klypr.ini`)
+
+Le fichier `klypr.ini` est situé dans le même répertoire que `klypr.exe` et permet de personnaliser l'ensemble du comportement :
+
+```ini
+[General]
+# Lancement au démarrage de Windows (1 = activé, 0 = désactivé)
+autostart = 1
+
+# Terminal à ouvrir avec Alt+Entrée (ex: wt.exe, powershell.exe, cmd.exe, bash.exe)
+# Repli automatique : wt.exe -> Package AppX -> PowerShell -> CMD
+terminal = wt.exe
+
+[Theme]
+# Thème visuel : system, dark, light, cyberpunk, dracula
+theme = system
+
+# Opacité de la fenêtre en pourcentage (de 50 à 100)
+opacity = 95
+
+[Aliases]
+# Définissez vos alias personnalisés ici.
+# Format : nom = commande, URL ou chemin de fichier/dossier
+# %s permet la substitution dynamique d'arguments lors de l'appel
+g = https://www.google.com/search?q=%s
+yt = https://www.youtube.com/results?search_query=%s
+gh = https://github.com/search?q=%s
+term = wt.exe
+proj = explorer.exe C:\Projets
+```
 
 ---
 

@@ -22,7 +22,7 @@ else()
     target_compile_options(klypr PRIVATE -Wall -Wextra -Werror)
 endif()
 
-target_link_libraries(klypr PRIVATE user32 gdi32 shell32 advapi32 dwmapi)
+target_link_libraries(klypr PRIVATE user32 gdi32 shell32 advapi32 dwmapi ole32)
 
 set_target_properties(klypr PROPERTIES
     OUTPUT_NAME "klypr"

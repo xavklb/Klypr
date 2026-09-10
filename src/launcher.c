@@ -1,5 +1,6 @@
 #include "launcher.h"
 #include "config.h"
+#include "input.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -57,8 +58,8 @@ typedef BOOL (WINAPI *pfnSetWindowCompositionAttribute)(HWND, WINCOMPATTRDATA *)
 
 typedef struct {
     wchar_t name[128];
-    wchar_t target[MAX_PATH];
-    wchar_t desc[64];
+    wchar_t target[ALIAS_TARGET_LEN];
+    wchar_t desc[128];
     bool is_action;
 } AppEntry;
 
@@ -98,7 +99,26 @@ static int s_app_count = 0;
 static MatchEntry s_matches[MAX_MATCHES];
 static int s_match_count = 0;
 static int s_selected_index = 0;
-static AppEntry s_url_entry;
+#define MAX_DYNAMIC_ENTRIES 64
+static AppEntry s_dynamic_entries[MAX_DYNAMIC_ENTRIES];
+static int s_dyn_count = 0;
+
+static const AppEntry *get_entry_for_match(int match_idx)
+{
+    if (match_idx < 0 || match_idx >= s_match_count) {
+        return NULL;
+    }
+    int app_idx = s_matches[match_idx].app_index;
+    if (app_idx >= 0 && app_idx < s_app_count) {
+        return &s_apps[app_idx];
+    } else if (app_idx < 0) {
+        int dyn_idx = -app_idx - 1;
+        if (dyn_idx >= 0 && dyn_idx < s_dyn_count) {
+            return &s_dynamic_entries[dyn_idx];
+        }
+    }
+    return NULL;
+}
 
 static const struct {
     const wchar_t *name;
@@ -313,6 +333,24 @@ static bool wcs_starts_with_ci(const wchar_t *str, const wchar_t *prefix)
     return true;
 }
 
+static bool wcs_ends_with_ci(const wchar_t *str, const wchar_t *suffix)
+{
+    if (str == NULL || suffix == NULL) {
+        return false;
+    }
+    size_t slen = wcslen(str);
+    size_t xlen = wcslen(suffix);
+    if (slen < xlen) {
+        return false;
+    }
+    for (size_t i = 0; i < xlen; i++) {
+        if (towlower(str[slen - xlen + i]) != towlower(suffix[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static void add_app_entry(const wchar_t *name, const wchar_t *target, const wchar_t *desc, bool is_action)
 {
     if (name == NULL || target == NULL || name[0] == L'\0' || s_app_count >= MAX_INDEXED_APPS) {
@@ -339,10 +377,10 @@ static void add_app_entry(const wchar_t *name, const wchar_t *target, const wcha
 
     wcsncpy(s_apps[s_app_count].name, name, 127);
     s_apps[s_app_count].name[127] = L'\0';
-    wcsncpy(s_apps[s_app_count].target, target, MAX_PATH - 1);
-    s_apps[s_app_count].target[MAX_PATH - 1] = L'\0';
-    wcsncpy(s_apps[s_app_count].desc, desc ? desc : L"Application", 63);
-    s_apps[s_app_count].desc[63] = L'\0';
+    wcsncpy(s_apps[s_app_count].target, target, ALIAS_TARGET_LEN - 1);
+    s_apps[s_app_count].target[ALIAS_TARGET_LEN - 1] = L'\0';
+    wcsncpy(s_apps[s_app_count].desc, desc ? desc : L"Application", 127);
+    s_apps[s_app_count].desc[127] = L'\0';
     s_apps[s_app_count].is_action = is_action;
     s_app_count++;
 }
@@ -436,7 +474,9 @@ static void index_all_applications(void)
 {
     s_app_count = 0;
 
-    // 1. Add Theme Configuration Actions
+    // 1. Add Theme and Configuration Actions
+    add_app_entry(L"Configuration: \u00c9diter klypr.ini (Alias, Th\u00e8mes...)", L"__config:open", L"Ouvrir klypr.ini dans le Bloc-notes", true);
+
     for (size_t i = 0; i < sizeof(s_theme_actions) / sizeof(s_theme_actions[0]); i++) {
         add_app_entry(s_theme_actions[i].name, s_theme_actions[i].target, s_theme_actions[i].desc, true);
     }
@@ -446,6 +486,14 @@ static void index_all_applications(void)
         add_app_entry(L"D\u00e9marrage: D\u00e9sactiver au d\u00e9marrage de Windows", L"__autostart:0", L"D\u00e9sactiver le lancement automatique", true);
     } else {
         add_app_entry(L"D\u00e9marrage: Activer au d\u00e9marrage de Windows", L"__autostart:1", L"Lancer Klypr au d\u00e9marrage de Windows", true);
+    }
+
+    // 2. Add User-defined Aliases (take precedence over shortcuts)
+    config_load_aliases();
+    for (int i = 0; i < g_config.alias_count; i++) {
+        wchar_t desc[128];
+        _snwprintf(desc, sizeof(desc) / sizeof(desc[0]), L"Alias \u2794 %s", g_config.aliases[i].target);
+        add_app_entry(g_config.aliases[i].name, g_config.aliases[i].target, desc, false);
     }
 
     // 2. Start Menu shortcuts
@@ -576,10 +624,304 @@ static bool is_likely_url(const wchar_t *str, wchar_t *out_url, size_t out_url_s
     return true;
 }
 
+static void url_encode(const wchar_t *src, wchar_t *dst, size_t dst_size)
+{
+    if (src == NULL || dst == NULL || dst_size == 0) {
+        return;
+    }
+    size_t d = 0;
+    while (*src != L'\0' && d + 4 < dst_size) {
+        wchar_t c = *src;
+        if ((c >= L'a' && c <= L'z') || (c >= L'A' && c <= L'Z') || (c >= L'0' && c <= L'9') ||
+            c == L'-' || c == L'_' || c == L'.' || c == L'~') {
+            dst[d++] = c;
+        } else if (c == L' ') {
+            dst[d++] = L'+';
+        } else if (c < 128) {
+            d += (size_t)_snwprintf(dst + d, dst_size - d, L"%%%02X", (unsigned int)c);
+        } else {
+            char utf8_buf[8] = {0};
+            WideCharToMultiByte(CP_UTF8, 0, src, 1, utf8_buf, sizeof(utf8_buf), NULL, NULL);
+            for (int i = 0; utf8_buf[i] != '\0' && d + 4 < dst_size; i++) {
+                d += (size_t)_snwprintf(dst + d, dst_size - d, L"%%%02X", (unsigned char)utf8_buf[i]);
+            }
+        }
+        src++;
+    }
+    dst[d] = L'\0';
+}
+
+static void unquote_str(wchar_t *str)
+{
+    if (str == NULL) {
+        return;
+    }
+    size_t len = wcslen(str);
+    if (len >= 2 && str[0] == L'"' && str[len - 1] == L'"') {
+        str[len - 1] = L'\0';
+        memmove(str, str + 1, (len - 1) * sizeof(wchar_t));
+    } else if (str[0] == L'"') {
+        memmove(str, str + 1, len * sizeof(wchar_t));
+    }
+}
+
+static bool is_popular_app(const wchar_t *name)
+{
+    static const wchar_t *popular[] = {
+        L"Chrome", L"Terminal", L"Code", L"Notepad", L"Explorer", L"PowerShell", L"Firefox", L"Edge"
+    };
+    for (size_t i = 0; i < sizeof(popular) / sizeof(popular[0]); i++) {
+        if (wcs_contains_ci(name, popular[i])) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void add_dynamic_match(const wchar_t *name, const wchar_t *target, const wchar_t *desc, int score)
+{
+    if (s_dyn_count >= MAX_DYNAMIC_ENTRIES) {
+        return;
+    }
+    if (s_match_count >= MAX_MATCHES && score <= s_matches[MAX_MATCHES - 1].score) {
+        return;
+    }
+
+    int insert_pos = -1;
+    for (int j = 0; j < s_match_count; j++) {
+        if (score > s_matches[j].score) {
+            insert_pos = j;
+            break;
+        }
+    }
+
+    if (insert_pos == -1 && s_match_count < MAX_MATCHES) {
+        insert_pos = s_match_count;
+    }
+
+    if (insert_pos != -1) {
+        int dyn_idx = s_dyn_count++;
+        wcsncpy(s_dynamic_entries[dyn_idx].name, name, 127);
+        s_dynamic_entries[dyn_idx].name[127] = L'\0';
+        wcsncpy(s_dynamic_entries[dyn_idx].target, target, ALIAS_TARGET_LEN - 1);
+        s_dynamic_entries[dyn_idx].target[ALIAS_TARGET_LEN - 1] = L'\0';
+        wcsncpy(s_dynamic_entries[dyn_idx].desc, desc ? desc : L"", 127);
+        s_dynamic_entries[dyn_idx].desc[127] = L'\0';
+        s_dynamic_entries[dyn_idx].is_action = true;
+
+        int limit = s_match_count < MAX_MATCHES ? s_match_count : (MAX_MATCHES - 1);
+        for (int k = limit; k > insert_pos; k--) {
+            s_matches[k] = s_matches[k - 1];
+        }
+        s_matches[insert_pos].app_index = -(dyn_idx + 1);
+        s_matches[insert_pos].score = score;
+        if (s_match_count < MAX_MATCHES) {
+            s_match_count++;
+        }
+    }
+}
+
+static void suggest_alias_targets(const wchar_t *alias_name, const wchar_t *cible)
+{
+    wchar_t clean_alias[64];
+    wcsncpy(clean_alias, alias_name ? alias_name : L"", 63);
+    clean_alias[63] = L'\0';
+    unquote_str(clean_alias);
+    const wchar_t *disp_alias = (clean_alias[0] != L'\0') ? clean_alias : L"<nom>";
+
+    // If cible is empty, propose popular/installed apps
+    if (cible == NULL || *cible == L'\0') {
+        int count = 0;
+        // Pass 1: popular apps
+        for (int i = 0; i < s_app_count && count < 5; i++) {
+            if (s_apps[i].is_action) continue;
+            if (wcsncmp(s_apps[i].desc, L"Alias", 5) == 0) continue;
+            if (!is_popular_app(s_apps[i].name)) continue;
+
+            wchar_t title[128];
+            _snwprintf(title, sizeof(title)/sizeof(title[0]), L"%s \u2794 %s", disp_alias, s_apps[i].name);
+
+            bool dup = false;
+            for (int d = 0; d < s_dyn_count; d++) {
+                if (wcscmp(s_dynamic_entries[d].name, title) == 0) {
+                    dup = true;
+                    break;
+                }
+            }
+            if (dup) continue;
+
+            const wchar_t *fname = wcsrchr(s_apps[i].target, L'\\');
+            fname = (fname != NULL) ? (fname + 1) : s_apps[i].target;
+
+            wchar_t action_target[ALIAS_TARGET_LEN];
+            _snwprintf(action_target, sizeof(action_target)/sizeof(action_target[0]), L"__alias_add:%s:%s", disp_alias, s_apps[i].target);
+            wchar_t desc[128];
+            _snwprintf(desc, sizeof(desc)/sizeof(desc[0]), L"%s", fname);
+            add_dynamic_match(title, action_target, desc, 4800 - count * 10);
+            count++;
+        }
+
+        // Pass 2: any other apps if we need more
+        for (int i = 0; i < s_app_count && count < 5; i++) {
+            if (s_apps[i].is_action) continue;
+            if (wcsncmp(s_apps[i].desc, L"Alias", 5) == 0) continue;
+
+            wchar_t title[128];
+            _snwprintf(title, sizeof(title)/sizeof(title[0]), L"%s \u2794 %s", disp_alias, s_apps[i].name);
+
+            bool dup = false;
+            for (int d = 0; d < s_dyn_count; d++) {
+                if (wcscmp(s_dynamic_entries[d].name, title) == 0) {
+                    dup = true;
+                    break;
+                }
+            }
+            if (dup) continue;
+
+            const wchar_t *fname = wcsrchr(s_apps[i].target, L'\\');
+            fname = (fname != NULL) ? (fname + 1) : s_apps[i].target;
+
+            wchar_t action_target[ALIAS_TARGET_LEN];
+            _snwprintf(action_target, sizeof(action_target)/sizeof(action_target[0]), L"__alias_add:%s:%s", disp_alias, s_apps[i].target);
+            wchar_t desc[128];
+            _snwprintf(desc, sizeof(desc)/sizeof(desc[0]), L"%s", fname);
+            add_dynamic_match(title, action_target, desc, 4800 - count * 10);
+            count++;
+        }
+        return;
+    }
+
+    // cible is non-empty
+    wchar_t clean_cible[ALIAS_TARGET_LEN];
+    wcsncpy(clean_cible, cible, ALIAS_TARGET_LEN - 1);
+    clean_cible[ALIAS_TARGET_LEN - 1] = L'\0';
+    unquote_str(clean_cible);
+
+    // 1. Is it a URL?
+    bool is_url = (wcs_starts_with_ci(clean_cible, L"http://") ||
+                   wcs_starts_with_ci(clean_cible, L"https://") ||
+                   wcs_starts_with_ci(clean_cible, L"www."));
+    if (is_url) {
+        wchar_t title[128];
+        _snwprintf(title, sizeof(title)/sizeof(title[0]), L"%s \u2794 %s", disp_alias, clean_cible);
+        wchar_t action_target[ALIAS_TARGET_LEN];
+        _snwprintf(action_target, sizeof(action_target)/sizeof(action_target[0]), L"__alias_add:%s:%s", disp_alias, clean_cible);
+        wchar_t desc[128];
+        _snwprintf(desc, sizeof(desc)/sizeof(desc[0]), L"Lien web (supporte %%s pour la recherche)");
+        add_dynamic_match(title, action_target, desc, 5000);
+    }
+
+    // 2. Is it a file or directory path?
+    bool is_path = (GetFileAttributesW(clean_cible) != INVALID_FILE_ATTRIBUTES ||
+                    wcschr(clean_cible, L'\\') != NULL ||
+                    wcschr(clean_cible, L'/') != NULL);
+    if (is_path && !is_url) {
+        wchar_t title[128];
+        _snwprintf(title, sizeof(title)/sizeof(title[0]), L"%s \u2794 %s", disp_alias, clean_cible);
+        wchar_t action_target[ALIAS_TARGET_LEN];
+        _snwprintf(action_target, sizeof(action_target)/sizeof(action_target[0]), L"__alias_add:%s:%s", disp_alias, clean_cible);
+        wchar_t desc[128];
+        _snwprintf(desc, sizeof(desc)/sizeof(desc[0]), L"Fichier ou dossier local");
+        add_dynamic_match(title, action_target, desc, 4900);
+    }
+
+    // 3. Search indexed applications matching clean_cible
+    size_t clen = wcslen(clean_cible);
+    for (int i = 0; i < s_app_count; i++) {
+        if (s_apps[i].is_action) continue;
+        if (wcsncmp(s_apps[i].desc, L"Alias", 5) == 0) continue;
+
+        const wchar_t *app_name = s_apps[i].name;
+        const wchar_t *app_target = s_apps[i].target;
+        size_t nlen = wcslen(app_name);
+
+        const wchar_t *fname = wcsrchr(app_target, L'\\');
+        if (fname != NULL) {
+            fname++;
+        } else {
+            fname = app_target;
+        }
+
+        int score = 0;
+
+        // Exact match
+        if (_wcsicmp(app_name, clean_cible) == 0) {
+            score = 4850;
+        } else if (_wcsicmp(fname, clean_cible) == 0) {
+            score = 4840;
+        } else if (wcs_ends_with_ci(fname, L".exe") &&
+                   _wcsnicmp(fname, clean_cible, clen) == 0 &&
+                   fname[clen] == L'.') {
+            score = 4840;
+        }
+        // Prefix match on app_name
+        else if (wcs_starts_with_ci(app_name, clean_cible)) {
+            score = 4750 - (int)(nlen - clen);
+        }
+        // Prefix match on fname
+        else if (wcs_starts_with_ci(fname, clean_cible)) {
+            score = 4700 - (int)(wcslen(fname) - clen);
+        }
+        // Word boundary match in app_name
+        else {
+            const wchar_t *p = app_name;
+            while (*p != L'\0') {
+                while (*p == L' ' || *p == L'-' || *p == L'_') p++;
+                if (wcs_starts_with_ci(p, clean_cible)) {
+                    score = 4650 - (int)(nlen - clen);
+                    break;
+                }
+                while (*p != L'\0' && *p != L' ' && *p != L'-' && *p != L'_') p++;
+            }
+
+            // Substring in app_name
+            if (score == 0 && wcs_contains_ci(app_name, clean_cible)) {
+                score = 4500 - (int)(nlen - clen);
+            }
+            // Substring in fname or target
+            else if (score == 0 && (wcs_contains_ci(fname, clean_cible) || wcs_contains_ci(app_target, clean_cible))) {
+                score = 4400;
+            }
+        }
+
+        if (score > 0) {
+            wchar_t title[128];
+            _snwprintf(title, sizeof(title)/sizeof(title[0]), L"%s \u2794 %s", disp_alias, app_name);
+
+            bool dup = false;
+            for (int d = 0; d < s_dyn_count; d++) {
+                if (wcscmp(s_dynamic_entries[d].name, title) == 0) {
+                    dup = true;
+                    break;
+                }
+            }
+            if (dup) continue;
+
+            wchar_t action_target[ALIAS_TARGET_LEN];
+            _snwprintf(action_target, sizeof(action_target)/sizeof(action_target[0]), L"__alias_add:%s:%s", disp_alias, app_target);
+            wchar_t desc[128];
+            _snwprintf(desc, sizeof(desc)/sizeof(desc[0]), L"%s", fname);
+            add_dynamic_match(title, action_target, desc, score);
+        }
+    }
+
+    // 4. Literal command fallback (if not already added as URL or path)
+    if (!is_url && !is_path) {
+        wchar_t title[128];
+        _snwprintf(title, sizeof(title)/sizeof(title[0]), L"Ajouter l'alias \"%s\" \u2794 %s", disp_alias, clean_cible);
+        wchar_t action_target[ALIAS_TARGET_LEN];
+        _snwprintf(action_target, sizeof(action_target)/sizeof(action_target[0]), L"__alias_add:%s:%s", disp_alias, clean_cible);
+        wchar_t desc[128];
+        _snwprintf(desc, sizeof(desc)/sizeof(desc[0]), L"Commande brute dans klypr.ini");
+        add_dynamic_match(title, action_target, desc, 4300);
+    }
+}
+
 static void filter_apps(const wchar_t *query)
 {
     s_match_count = 0;
     s_selected_index = 0;
+    s_dyn_count = 0;
 
     if (query == NULL) {
         return;
@@ -593,17 +935,221 @@ static void filter_apps(const wchar_t *query)
         return;
     }
 
-    size_t qlen = wcslen(query);
+    // 1. Check for Alias management commands (:alias or alias)
+    bool is_alias_exact = (_wcsicmp(query, L":alias") == 0 || _wcsicmp(query, L"alias") == 0);
+    bool is_alias_cmd = (wcs_starts_with_ci(query, L":alias ") || wcs_starts_with_ci(query, L"alias "));
 
+    if (is_alias_exact) {
+        add_dynamic_match(
+            L"Configuration: \u00c9diter les alias (klypr.ini)",
+            L"__config:open",
+            L"Ouvrir klypr.ini dans le Bloc-notes",
+            5000
+        );
+        add_dynamic_match(
+            L"Ajouter un alias : :alias <nom> <cible>",
+            L"__config:open",
+            L"Ex: :alias g https://google.com/search?q=%s",
+            4900
+        );
+        add_dynamic_match(
+            L"Supprimer un alias : :alias del <nom>",
+            L"__config:open",
+            L"Ex: :alias del g",
+            4800
+        );
+
+        // Also list existing aliases
+        for (int k = 0; k < g_config.alias_count && s_match_count < MAX_MATCHES; k++) {
+            wchar_t title[128];
+            _snwprintf(title, sizeof(title)/sizeof(title[0]), L"Alias \"%s\"", g_config.aliases[k].name);
+            wchar_t desc[128];
+            _snwprintf(desc, sizeof(desc)/sizeof(desc[0]), L"\u2794 %s", g_config.aliases[k].target);
+            add_dynamic_match(title, g_config.aliases[k].target, desc, 4700 - k);
+        }
+        return;
+    } else if (is_alias_cmd) {
+        bool has_colon = (query[0] == L':');
+        const wchar_t *cmd_word = has_colon ? L":alias" : L"alias";
+        const wchar_t *cmd_args = query + (has_colon ? 7 : 6);
+        while (*cmd_args == L' ' || *cmd_args == L'\t') cmd_args++;
+
+        if (*cmd_args == L'\0') {
+            wchar_t title[128];
+            _snwprintf(title, sizeof(title)/sizeof(title[0]), L"%s <nom> <cible>", cmd_word);
+            add_dynamic_match(
+                title,
+                L"__config:open",
+                L"Tapez le nom de l'alias suivi de la cible",
+                5000
+            );
+            suggest_alias_targets(L"<nom>", L"");
+            return;
+        }
+
+        if (wcs_starts_with_ci(cmd_args, L"del ") || wcs_starts_with_ci(cmd_args, L"rm ") || wcs_starts_with_ci(cmd_args, L"remove ")) {
+            const wchar_t *name = cmd_args + (wcs_starts_with_ci(cmd_args, L"remove ") ? 7 : (wcs_starts_with_ci(cmd_args, L"del ") ? 4 : 3));
+            while (*name == L' ' || *name == L'\t') name++;
+
+            if (*name == L'\0') {
+                wchar_t title[128];
+                _snwprintf(title, sizeof(title)/sizeof(title[0]), L"%s del <nom>", cmd_word);
+                add_dynamic_match(
+                    title,
+                    L"__config:open",
+                    L"S\u00e9lectionnez un alias ci-dessous ou tapez son nom",
+                    5000
+                );
+            }
+
+            for (int k = 0; k < g_config.alias_count; k++) {
+                if (*name == L'\0' || wcs_contains_ci(g_config.aliases[k].name, name)) {
+                    wchar_t title[128];
+                    _snwprintf(title, sizeof(title)/sizeof(title[0]), L"Supprimer l'alias \"%s\"", g_config.aliases[k].name);
+                    wchar_t action_target[ALIAS_TARGET_LEN];
+                    _snwprintf(action_target, sizeof(action_target)/sizeof(action_target[0]), L"__alias_del:%s", g_config.aliases[k].name);
+                    wchar_t desc[128];
+                    _snwprintf(desc, sizeof(desc)/sizeof(desc[0]), L"Cible : %s", g_config.aliases[k].target);
+                    add_dynamic_match(title, action_target, desc, 4800 - k);
+                }
+            }
+
+            if (*name != L'\0') {
+                wchar_t title[128];
+                _snwprintf(title, sizeof(title)/sizeof(title[0]), L"Supprimer l'alias \"%s\"", name);
+                wchar_t action_target[ALIAS_TARGET_LEN];
+                _snwprintf(action_target, sizeof(action_target)/sizeof(action_target[0]), L"__alias_del:%s", name);
+                add_dynamic_match(title, action_target, L"Supprimer de klypr.ini", 4000);
+            }
+            return;
+        }
+
+        const wchar_t *p = cmd_args;
+        if (wcs_starts_with_ci(p, L"add ")) {
+            p += 4;
+            while (*p == L' ' || *p == L'\t') p++;
+        }
+
+        const wchar_t *space = wcschr(p, L' ');
+        const wchar_t *eq = wcschr(p, L'=');
+        const wchar_t *delim = space;
+        if (eq != NULL && (delim == NULL || eq < delim)) {
+            delim = eq;
+        }
+
+        if (delim == NULL) {
+            wchar_t alias_name[64];
+            wcsncpy(alias_name, p, 63);
+            alias_name[63] = L'\0';
+            unquote_str(alias_name);
+
+            wchar_t title[128];
+            _snwprintf(title, sizeof(title)/sizeof(title[0]), L"%s %s <cible>", cmd_word, alias_name);
+            wchar_t desc[128];
+            _snwprintf(desc, sizeof(desc)/sizeof(desc[0]), L"Tapez un espace puis la cible (ou choisissez ci-dessous)");
+            add_dynamic_match(title, L"__config:open", desc, 5000);
+
+            suggest_alias_targets(alias_name, L"");
+        } else {
+            wchar_t alias_name[64];
+            size_t nlen = (size_t)(delim - p);
+            if (nlen >= 64) nlen = 63;
+            wcsncpy(alias_name, p, nlen);
+            alias_name[nlen] = L'\0';
+
+            while (nlen > 0 && (alias_name[nlen - 1] == L' ' || alias_name[nlen - 1] == L'\t')) {
+                alias_name[--nlen] = L'\0';
+            }
+            unquote_str(alias_name);
+
+            const wchar_t *cible = delim + 1;
+            while (*cible == L' ' || *cible == L'\t' || *cible == L'=') cible++;
+
+            if (*cible == L'\0') {
+                wchar_t title[128];
+                _snwprintf(title, sizeof(title)/sizeof(title[0]), L"%s %s <cible>", cmd_word, alias_name);
+                wchar_t desc[128];
+                _snwprintf(desc, sizeof(desc)/sizeof(desc[0]), L"Tapez la cible (app, URL avec %%s, dossier...)");
+                add_dynamic_match(title, L"__config:open", desc, 5000);
+            }
+
+            suggest_alias_targets(alias_name, cible);
+        }
+        return;
+    }
+
+    // 2. Check for Alias invocation with parameters (e.g. "g query", "gh repo", "code project")
+    const wchar_t *first_space = wcschr(query, L' ');
+    if (first_space != NULL) {
+        wchar_t alias_cand[64];
+        size_t clen = (size_t)(first_space - query);
+        if (clen < 64) {
+            wcsncpy(alias_cand, query, clen);
+            alias_cand[clen] = L'\0';
+
+            const wchar_t *param_str = first_space + 1;
+            while (*param_str == L' ' || *param_str == L'\t') param_str++;
+
+            if (*param_str != L'\0') {
+                const wchar_t *alias_target = config_get_alias_target(alias_cand);
+                if (alias_target != NULL) {
+                    wchar_t resolved_target[ALIAS_TARGET_LEN];
+                    wchar_t resolved_desc[128];
+
+                    if (wcsstr(alias_target, L"%s") != NULL) {
+                        wchar_t encoded[ALIAS_TARGET_LEN];
+                        if (wcs_starts_with_ci(alias_target, L"http://") || wcs_starts_with_ci(alias_target, L"https://")) {
+                            url_encode(param_str, encoded, ALIAS_TARGET_LEN);
+                        } else {
+                            wcsncpy(encoded, param_str, ALIAS_TARGET_LEN - 1);
+                            encoded[ALIAS_TARGET_LEN - 1] = L'\0';
+                        }
+                        const wchar_t *sub = wcsstr(alias_target, L"%s");
+                        size_t pre_len = (size_t)(sub - alias_target);
+                        _snwprintf(resolved_target, ALIAS_TARGET_LEN, L"%.*s%s%s", (int)pre_len, alias_target, encoded, sub + 2);
+                        _snwprintf(resolved_desc, sizeof(resolved_desc)/sizeof(resolved_desc[0]), L"Alias \"%s\" avec param\u00e8tres", alias_cand);
+                    } else if (wcs_starts_with_ci(alias_target, L"http://") || wcs_starts_with_ci(alias_target, L"https://")) {
+                        wchar_t encoded[ALIAS_TARGET_LEN];
+                        url_encode(param_str, encoded, ALIAS_TARGET_LEN);
+                        size_t t_len = wcslen(alias_target);
+                        if (alias_target[t_len - 1] == L'=' || alias_target[t_len - 1] == L'/') {
+                            _snwprintf(resolved_target, ALIAS_TARGET_LEN, L"%s%s", alias_target, encoded);
+                        } else {
+                            _snwprintf(resolved_target, ALIAS_TARGET_LEN, L"%s?q=%s", alias_target, encoded);
+                        }
+                        _snwprintf(resolved_desc, sizeof(resolved_desc)/sizeof(resolved_desc[0]), L"Recherche web via \"%s\"", alias_cand);
+                    } else {
+                        _snwprintf(resolved_target, ALIAS_TARGET_LEN, L"%s %s", alias_target, param_str);
+                        _snwprintf(resolved_desc, sizeof(resolved_desc)/sizeof(resolved_desc[0]), L"Ex\u00e9cuter avec l'alias \"%s\"", alias_cand);
+                    }
+
+                    add_dynamic_match(query, resolved_target, resolved_desc, 3000);
+                }
+            }
+        }
+    }
+
+    // 3. Normal search in indexed apps, actions and aliases
+    size_t qlen = wcslen(query);
     for (int i = 0; i < s_app_count; i++) {
         int score = 0;
         const wchar_t *name = s_apps[i].name;
         size_t nlen = wcslen(name);
+        bool is_alias = (wcsncmp(s_apps[i].desc, L"Alias", 5) == 0);
 
-        // Check if query is targeting themes (e.g. "th", "theme", "dark", "light", etc.)
         if (s_apps[i].is_action) {
             if (wcs_contains_ci(name, query) || wcs_contains_ci(s_apps[i].desc, query)) {
                 score = 900 - (int)(nlen - qlen);
+            }
+        } else if (is_alias) {
+            if (_wcsicmp(name, query) == 0) {
+                score = 2500;
+            } else if (wcs_starts_with_ci(name, query)) {
+                score = 2000 - (int)(nlen - qlen);
+            } else if (wcs_contains_ci(name, query)) {
+                score = 1200 - (int)(nlen - qlen);
+            } else if (wcs_contains_ci(s_apps[i].target, query)) {
+                score = 800;
             }
         } else {
             if (wcs_starts_with_ci(name, query)) {
@@ -658,21 +1204,11 @@ static void filter_apps(const wchar_t *query)
         }
     }
 
+    // 4. URL fallback if no matches
     if (s_match_count == 0) {
         wchar_t normalized_url[MAX_PATH];
         if (is_likely_url(query, normalized_url, MAX_PATH)) {
-            wcsncpy(s_url_entry.name, normalized_url, 127);
-            s_url_entry.name[127] = L'\0';
-            wcsncpy(s_url_entry.target, normalized_url, MAX_PATH - 1);
-            s_url_entry.target[MAX_PATH - 1] = L'\0';
-            wcsncpy(s_url_entry.desc, L"Navigateur Web", 63);
-            s_url_entry.desc[63] = L'\0';
-            s_url_entry.is_action = true;
-
-            s_matches[0].app_index = -1;
-            s_matches[0].score = 1000;
-            s_match_count = 1;
-            s_selected_index = 0;
+            add_dynamic_match(normalized_url, normalized_url, L"Navigateur Web", 1000);
         }
     }
 }
@@ -720,6 +1256,38 @@ static void execute_command(const wchar_t *input)
         return;
     }
 
+    // Check if this is an internal config open action
+    if (wcscmp(input, L"__config:open") == 0) {
+        ShellExecuteW(NULL, L"open", config_get_ini_path(), NULL, NULL, SW_SHOWNORMAL);
+        return;
+    }
+
+    // Check if this is an internal alias add action: __alias_add:<name>:<target>
+    if (wcsncmp(input, L"__alias_add:", 12) == 0) {
+        const wchar_t *payload = input + 12;
+        const wchar_t *sep = wcschr(payload, L':');
+        if (sep != NULL) {
+            wchar_t alias_name[64];
+            size_t nlen = (size_t)(sep - payload);
+            if (nlen >= 64) nlen = 63;
+            wcsncpy(alias_name, payload, nlen);
+            alias_name[nlen] = L'\0';
+
+            const wchar_t *target = sep + 1;
+            config_add_alias(alias_name, target);
+            index_all_applications();
+        }
+        return;
+    }
+
+    // Check if this is an internal alias delete action: __alias_del:<name>
+    if (wcsncmp(input, L"__alias_del:", 12) == 0) {
+        const wchar_t *alias_name = input + 12;
+        config_remove_alias(alias_name);
+        index_all_applications();
+        return;
+    }
+
     // Check if this is an internal theme switch action
     if (wcsncmp(input, L"__theme:", 8) == 0) {
         int theme_id = _wtoi(input + 8);
@@ -733,6 +1301,12 @@ static void execute_command(const wchar_t *input)
         bool enable = (input[12] == L'1');
         config_set_autostart(enable);
         index_all_applications();
+        return;
+    }
+
+    // Direct check if input is an existing file or directory path (supports unquoted paths with spaces)
+    if (GetFileAttributesW(input) != INVALID_FILE_ATTRIBUTES) {
+        ShellExecuteW(NULL, L"open", input, NULL, NULL, SW_SHOWNORMAL);
         return;
     }
 
@@ -838,23 +1412,79 @@ static LRESULT CALLBACK edit_subclass_proc(HWND hwnd, UINT uMsg, WPARAM wParam, 
 
         if (wParam == VK_TAB) {
             if (s_match_count > 0 && s_selected_index >= 0 && s_selected_index < s_match_count) {
-                int app_idx = s_matches[s_selected_index].app_index;
-                const wchar_t *name = (app_idx == -1) ? s_url_entry.name : s_apps[app_idx].name;
-                SetWindowTextW(hwnd, name);
-                int len = (int)wcslen(name);
-                SendMessageW(hwnd, EM_SETSEL, len, len);
+                const AppEntry *entry = get_entry_for_match(s_selected_index);
+                if (entry != NULL) {
+                    if (wcsncmp(entry->target, L"__alias_add:", 12) == 0) {
+                        const wchar_t *payload = entry->target + 12;
+                        const wchar_t *sep = wcschr(payload, L':');
+                        if (sep != NULL) {
+                            wchar_t a_name[64];
+                            size_t nlen = (size_t)(sep - payload);
+                            if (nlen >= 64) nlen = 63;
+                            wcsncpy(a_name, payload, nlen);
+                            a_name[nlen] = L'\0';
+                            const wchar_t *a_target = sep + 1;
+
+                            wchar_t cur_text[16] = {0};
+                            GetWindowTextW(hwnd, cur_text, 15);
+                            const wchar_t *cmd_word = (cur_text[0] == L':') ? L":alias" : L"alias";
+
+                            wchar_t tab_buf[ALIAS_TARGET_LEN + 128];
+                            _snwprintf(tab_buf, sizeof(tab_buf)/sizeof(tab_buf[0]), L"%s %s %s", cmd_word, a_name, a_target);
+                            SetWindowTextW(hwnd, tab_buf);
+                            int len = (int)wcslen(tab_buf);
+                            SendMessageW(hwnd, EM_SETSEL, len, len);
+                            return 0;
+                        }
+                    } else if (wcsncmp(entry->target, L"__alias_del:", 12) == 0) {
+                        const wchar_t *a_name = entry->target + 12;
+                        wchar_t cur_text[16] = {0};
+                        GetWindowTextW(hwnd, cur_text, 15);
+                        const wchar_t *cmd_word = (cur_text[0] == L':') ? L":alias" : L"alias";
+
+                        wchar_t tab_buf[128];
+                        _snwprintf(tab_buf, sizeof(tab_buf)/sizeof(tab_buf[0]), L"%s del %s", cmd_word, a_name);
+                        SetWindowTextW(hwnd, tab_buf);
+                        int len = (int)wcslen(tab_buf);
+                        SendMessageW(hwnd, EM_SETSEL, len, len);
+                        return 0;
+                    } else if (wcscmp(entry->target, L"__config:open") == 0) {
+                        int cur_len = GetWindowTextLengthW(hwnd);
+                        wchar_t cur_buf[256];
+                        GetWindowTextW(hwnd, cur_buf, 255);
+                        if (cur_len > 0 && cur_buf[cur_len - 1] != L' ') {
+                            cur_buf[cur_len] = L' ';
+                            cur_buf[cur_len + 1] = L'\0';
+                            SetWindowTextW(hwnd, cur_buf);
+                            SendMessageW(hwnd, EM_SETSEL, cur_len + 1, cur_len + 1);
+                        }
+                        return 0;
+                    }
+
+                    SetWindowTextW(hwnd, entry->name);
+                    int len = (int)wcslen(entry->name);
+                    SendMessageW(hwnd, EM_SETSEL, len, len);
+                }
             }
             return 0;
         }
 
         if (wParam == VK_RETURN) {
-            wchar_t target_to_exec[MAX_PATH] = {0};
+            bool alt_is_down = ((GetKeyState(VK_MENU) & 0x8000) != 0);
+            if (alt_is_down) {
+                launcher_hide();
+                input_launch_terminal();
+                return 0;
+            }
+
+            wchar_t target_to_exec[ALIAS_TARGET_LEN] = {0};
             if (s_match_count > 0 && s_selected_index >= 0 && s_selected_index < s_match_count) {
-                int app_idx = s_matches[s_selected_index].app_index;
-                const wchar_t *target = (app_idx == -1) ? s_url_entry.target : s_apps[app_idx].target;
-                wcsncpy(target_to_exec, target, MAX_PATH - 1);
+                const AppEntry *entry = get_entry_for_match(s_selected_index);
+                if (entry != NULL) {
+                    wcsncpy(target_to_exec, entry->target, ALIAS_TARGET_LEN - 1);
+                }
             } else {
-                GetWindowTextW(hwnd, target_to_exec, MAX_PATH - 1);
+                GetWindowTextW(hwnd, target_to_exec, ALIAS_TARGET_LEN - 1);
             }
             launcher_hide();
             execute_command(target_to_exec);
@@ -917,11 +1547,12 @@ static LRESULT CALLBACK launcher_wnd_proc(HWND hwnd, UINT uMsg, WPARAM wParam, L
         if (s_match_count > 0) {
             int clicked = (y - BASE_HEIGHT - 4) / ITEM_HEIGHT;
             if (clicked >= 0 && clicked < s_match_count) {
-                int app_idx = s_matches[clicked].app_index;
-                const wchar_t *target = (app_idx == -1) ? s_url_entry.target : s_apps[app_idx].target;
-                launcher_hide();
-                execute_command(target);
-                return 0;
+                const AppEntry *entry = get_entry_for_match(clicked);
+                if (entry != NULL) {
+                    launcher_hide();
+                    execute_command(entry->target);
+                    return 0;
+                }
             }
         }
         return 0;
@@ -971,9 +1602,9 @@ static LRESULT CALLBACK launcher_wnd_proc(HWND hwnd, UINT uMsg, WPARAM wParam, L
                 int item_top = BASE_HEIGHT + 4 + i * ITEM_HEIGHT;
                 int item_bottom = item_top + ITEM_HEIGHT - 2;
 
-                int app_idx = s_matches[i].app_index;
-                const wchar_t *name = (app_idx == -1) ? s_url_entry.name : s_apps[app_idx].name;
-                const wchar_t *desc = (app_idx == -1) ? s_url_entry.desc : s_apps[app_idx].desc;
+                const AppEntry *entry = get_entry_for_match(i);
+                const wchar_t *name = entry ? entry->name : L"";
+                const wchar_t *desc = entry ? entry->desc : L"";
 
                 if (i == s_selected_index) {
                     // Modern rounded selection card/pill

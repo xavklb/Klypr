@@ -29,12 +29,16 @@ bool app_init(void)
         return false;
     }
 
+    // Initialize COM for ShellExecute and modern packaged apps
+    CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+
     if (!config_init()) {
         if (s_instance_mutex != NULL) {
             ReleaseMutex(s_instance_mutex);
             CloseHandle(s_instance_mutex);
             s_instance_mutex = NULL;
         }
+        CoUninitialize();
         return false;
     }
 
@@ -45,6 +49,7 @@ bool app_init(void)
             CloseHandle(s_instance_mutex);
             s_instance_mutex = NULL;
         }
+        CoUninitialize();
         return false;
     }
 
@@ -56,6 +61,7 @@ bool app_init(void)
             CloseHandle(s_instance_mutex);
             s_instance_mutex = NULL;
         }
+        CoUninitialize();
         return false;
     }
 
@@ -69,6 +75,10 @@ int app_run(void)
     MSG msg;
 
     while (s_running && GetMessageW(&msg, NULL, 0, 0) > 0) {
+        if (msg.message == WM_HOTKEY) {
+            input_handle_hotkey((int)msg.wParam);
+            continue;
+        }
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
@@ -88,6 +98,8 @@ void app_cleanup(void)
         CloseHandle(s_instance_mutex);
         s_instance_mutex = NULL;
     }
+
+    CoUninitialize();
 }
 
 void app_stop(void)

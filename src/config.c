@@ -5,7 +5,8 @@
 AppConfig g_config = {
     .theme = THEME_SYSTEM,
     .opacity = 95,
-    .autostart = true
+    .autostart = true,
+    .terminal = L"wt.exe"
 };
 
 static wchar_t s_ini_path[MAX_PATH] = {0};
@@ -100,9 +101,21 @@ bool config_init(void)
     if (g_config.opacity < 50) g_config.opacity = 50;
     if (g_config.opacity > 100) g_config.opacity = 100;
 
+    GetPrivateProfileStringW(L"General", L"terminal", L"wt.exe", g_config.terminal, MAX_PATH - 1, s_ini_path);
+
     wchar_t theme_buf[64] = {0};
     GetPrivateProfileStringW(L"Theme", L"theme", L"system", theme_buf, 63, s_ini_path);
     g_config.theme = config_string_to_theme(theme_buf);
+
+    config_load_aliases();
+
+    // Default aliases if none are configured yet
+    if (g_config.alias_count == 0) {
+        config_add_alias(L"g", L"https://www.google.com/search?q=%s");
+        config_add_alias(L"yt", L"https://www.youtube.com/results?search_query=%s");
+        config_add_alias(L"gh", L"https://github.com/search?q=%s");
+        config_add_alias(L"term", L"wt.exe");
+    }
 
     // Save to create ini file if it doesn't exist yet
     config_save();
@@ -114,6 +127,7 @@ void config_save(void)
     init_ini_path();
 
     WritePrivateProfileStringW(L"General", L"autostart", g_config.autostart ? L"1" : L"0", s_ini_path);
+    WritePrivateProfileStringW(L"General", L"terminal", g_config.terminal, s_ini_path);
 
     WritePrivateProfileStringW(L"Theme", L"theme", config_theme_to_string(g_config.theme), s_ini_path);
 
@@ -136,6 +150,101 @@ void config_set_autostart(bool enabled)
     g_config.autostart = enabled;
     autostart_sync_registry(enabled);
     config_save();
+}
+
+void config_set_terminal(const wchar_t *terminal)
+{
+    if (terminal != NULL) {
+        wcsncpy(g_config.terminal, terminal, MAX_PATH - 1);
+        g_config.terminal[MAX_PATH - 1] = L'\0';
+        config_save();
+    }
+}
+
+void config_load_aliases(void)
+{
+    init_ini_path();
+    g_config.alias_count = 0;
+
+    wchar_t buffer[8192];
+    DWORD len = GetPrivateProfileSectionW(L"Aliases", buffer, sizeof(buffer) / sizeof(buffer[0]), s_ini_path);
+    if (len == 0) {
+        return;
+    }
+
+    const wchar_t *ptr = buffer;
+    while (*ptr != L'\0' && g_config.alias_count < MAX_ALIASES) {
+        const wchar_t *eq = wcschr(ptr, L'=');
+        if (eq != NULL) {
+            const wchar_t *k_start = ptr;
+            while (*k_start == L' ' || *k_start == L'\t') k_start++;
+            const wchar_t *k_end = eq - 1;
+            while (k_end >= k_start && (*k_end == L' ' || *k_end == L'\t')) k_end--;
+
+            const wchar_t *v_start = eq + 1;
+            while (*v_start == L' ' || *v_start == L'\t') v_start++;
+            const wchar_t *v_end = ptr + wcslen(ptr) - 1;
+            while (v_end >= v_start && (*v_end == L' ' || *v_end == L'\t' || *v_end == L'\r' || *v_end == L'\n')) v_end--;
+
+            if (k_end >= k_start && v_end >= v_start) {
+                size_t k_len = (size_t)(k_end - k_start + 1);
+                size_t v_len = (size_t)(v_end - v_start + 1);
+
+                if (k_len >= 64) k_len = 63;
+                if (v_len >= ALIAS_TARGET_LEN) v_len = ALIAS_TARGET_LEN - 1;
+
+                wcsncpy(g_config.aliases[g_config.alias_count].name, k_start, k_len);
+                g_config.aliases[g_config.alias_count].name[k_len] = L'\0';
+
+                wcsncpy(g_config.aliases[g_config.alias_count].target, v_start, v_len);
+                g_config.aliases[g_config.alias_count].target[v_len] = L'\0';
+
+                g_config.alias_count++;
+            }
+        }
+        ptr += wcslen(ptr) + 1;
+    }
+}
+
+bool config_add_alias(const wchar_t *name, const wchar_t *target)
+{
+    if (name == NULL || target == NULL || name[0] == L'\0' || target[0] == L'\0') {
+        return false;
+    }
+    init_ini_path();
+    WritePrivateProfileStringW(L"Aliases", name, target, s_ini_path);
+    config_load_aliases();
+    return true;
+}
+
+bool config_remove_alias(const wchar_t *name)
+{
+    if (name == NULL || name[0] == L'\0') {
+        return false;
+    }
+    init_ini_path();
+    WritePrivateProfileStringW(L"Aliases", name, NULL, s_ini_path);
+    config_load_aliases();
+    return true;
+}
+
+const wchar_t *config_get_alias_target(const wchar_t *name)
+{
+    if (name == NULL || name[0] == L'\0') {
+        return NULL;
+    }
+    for (int i = 0; i < g_config.alias_count; i++) {
+        if (_wcsicmp(g_config.aliases[i].name, name) == 0) {
+            return g_config.aliases[i].target;
+        }
+    }
+    return NULL;
+}
+
+const wchar_t *config_get_ini_path(void)
+{
+    init_ini_path();
+    return s_ini_path;
 }
 
 void config_cleanup(void)
