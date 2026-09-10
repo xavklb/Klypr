@@ -4,6 +4,7 @@
 #include "event.h"
 #include "window.h"
 #include "launcher.h"
+#include <stdio.h>
 #include <windows.h>
 
 static bool s_running = false;
