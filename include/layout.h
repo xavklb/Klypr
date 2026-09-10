@@ -22,6 +22,9 @@ typedef struct BspNode {
 
 BspNode *bsp_node_create(HWND window);
 void bsp_node_destroy(BspNode *node);
-void layout_arrange(BspNode *root, RECT bounds);
+BspNode *bsp_node_find(BspNode *root, HWND window);
+void bsp_node_insert(BspNode **root, HWND window, HWND focused);
+void bsp_node_remove(BspNode **root, HWND window);
+void layout_arrange(BspNode *root, RECT bounds, int gap_size, int border_radius);
 
 #endif

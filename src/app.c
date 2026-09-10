@@ -14,7 +14,6 @@ static HANDLE s_instance_mutex = NULL;
 
 bool app_init(void)
 {
-    // Enforce single-instance
     s_instance_mutex = CreateMutexW(NULL, TRUE, KLYPR_MUTEX_NAME);
     if (s_instance_mutex == NULL || GetLastError() == ERROR_ALREADY_EXISTS) {
         if (s_instance_mutex != NULL) {
@@ -22,7 +21,6 @@ bool app_init(void)
             s_instance_mutex = NULL;
         }
 
-        // If an instance is already running, bring up its launcher
         HWND hwnd_existing = FindWindowW(L"KlyprLauncherClass", NULL);
         if (hwnd_existing != NULL) {
             PostMessageW(hwnd_existing, WM_KLYPR_SHOW, 0, 0);
@@ -50,7 +48,19 @@ bool app_init(void)
         return false;
     }
 
+    if (!window_init()) {
+        launcher_cleanup();
+        config_cleanup();
+        if (s_instance_mutex != NULL) {
+            ReleaseMutex(s_instance_mutex);
+            CloseHandle(s_instance_mutex);
+            s_instance_mutex = NULL;
+        }
+        return false;
+    }
+
     if (!input_init()) {
+        window_cleanup();
         launcher_cleanup();
         config_cleanup();
         if (s_instance_mutex != NULL) {
@@ -63,6 +73,7 @@ bool app_init(void)
 
     if (!event_init()) {
         input_cleanup();
+        window_cleanup();
         launcher_cleanup();
         config_cleanup();
         if (s_instance_mutex != NULL) {
@@ -96,6 +107,7 @@ void app_cleanup(void)
     s_running = false;
     event_cleanup();
     input_cleanup();
+    window_cleanup();
     launcher_cleanup();
     config_cleanup();
 
