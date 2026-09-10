@@ -5,11 +5,8 @@ LDFLAGS ?= -mwindows -luser32 -lgdi32 -lshell32 -ladvapi32 -ldwmapi
 SRC = src/main.c \
       src/app.c \
       src/config.c \
-      src/event.c \
       src/input.c \
-      src/launcher.c \
-      src/layout.c \
-      src/window.c
+      src/launcher.c
 
 OBJ = $(SRC:.c=.o)
 TARGET = klypr.exe

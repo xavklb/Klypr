@@ -14,8 +14,6 @@ typedef enum {
 } ThemeType;
 
 typedef struct {
-    int gap_size;
-    int border_width;
     ThemeType theme;
     int opacity;
 } AppConfig;

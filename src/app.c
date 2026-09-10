@@ -1,8 +1,6 @@
 #include "app.h"
 #include "config.h"
 #include "input.h"
-#include "event.h"
-#include "window.h"
 #include "launcher.h"
 #include <stdio.h>
 #include <windows.h>
@@ -61,19 +59,6 @@ bool app_init(void)
         return false;
     }
 
-    if (!event_init()) {
-        input_cleanup();
-        launcher_cleanup();
-        config_cleanup();
-        if (s_instance_mutex != NULL) {
-            ReleaseMutex(s_instance_mutex);
-            CloseHandle(s_instance_mutex);
-            s_instance_mutex = NULL;
-        }
-        return false;
-    }
-
-    window_scan_manageable();
     s_running = true;
 
     return true;
@@ -94,7 +79,6 @@ int app_run(void)
 void app_cleanup(void)
 {
     s_running = false;
-    event_cleanup();
     input_cleanup();
     launcher_cleanup();
     config_cleanup();

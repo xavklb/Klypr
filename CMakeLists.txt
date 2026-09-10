@@ -8,11 +8,8 @@ set(SOURCES
     src/main.c
     src/app.c
     src/config.c
-    src/event.c
     src/input.c
     src/launcher.c
-    src/layout.c
-    src/window.c
 )
 
 add_executable(klypr WIN32 ${SOURCES})

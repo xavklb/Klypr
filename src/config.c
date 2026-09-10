@@ -3,8 +3,6 @@
 #include <wchar.h>
 
 AppConfig g_config = {
-    .gap_size = 8,
-    .border_width = 2,
     .theme = THEME_SYSTEM,
     .opacity = 95
 };
@@ -70,8 +68,6 @@ bool config_init(void)
 {
     init_ini_path();
 
-    g_config.gap_size = GetPrivateProfileIntW(L"General", L"gap_size", 8, s_ini_path);
-    g_config.border_width = GetPrivateProfileIntW(L"General", L"border_width", 2, s_ini_path);
     g_config.opacity = GetPrivateProfileIntW(L"Theme", L"opacity", 95, s_ini_path);
 
     if (g_config.opacity < 50) g_config.opacity = 50;
@@ -90,16 +86,9 @@ void config_save(void)
 {
     init_ini_path();
 
-    wchar_t num_buf[32];
-
-    _snwprintf(num_buf, 32, L"%d", g_config.gap_size);
-    WritePrivateProfileStringW(L"General", L"gap_size", num_buf, s_ini_path);
-
-    _snwprintf(num_buf, 32, L"%d", g_config.border_width);
-    WritePrivateProfileStringW(L"General", L"border_width", num_buf, s_ini_path);
-
     WritePrivateProfileStringW(L"Theme", L"theme", config_theme_to_string(g_config.theme), s_ini_path);
 
+    wchar_t num_buf[32];
     _snwprintf(num_buf, 32, L"%d", g_config.opacity);
     WritePrivateProfileStringW(L"Theme", L"opacity", num_buf, s_ini_path);
 }

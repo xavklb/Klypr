@@ -1,18 +1,19 @@
 # Klypr
 
-Klypr est un gestionnaire de fenêtres par pavage dynamique (*dynamic tiling window manager*) pour Windows, inspiré de la philosophie et de la fluidité de Hyprland sous Linux.
+Klypr est un sélecteur et lanceur d'applications ultra-rapide (*application launcher bar*) pour Windows, inspiré de Spotlight, Rofi et Wofi.
 
-Il organise automatiquement vos fenêtres sous la forme d'un arbre binaire (*Binary Space Partitioning* - BSP) pour maximiser l'espace écran et optimiser le flux de travail au clavier.
+Conçu pour une productivité maximale au clavier, il offre un design moderne translucide (effet Acrylic / Mica) et une recherche instantanée d'applications, de raccourcis, d'URL et de thèmes.
 
 ---
 
 ## Fonctionnalités
 
-- **Agencement BSP dynamique** : subdivision automatique horizontale et verticale des fenêtres lors de l'ouverture et de la fermeture.
-- **Filtrage intelligent** : prise en charge exclusive des fenêtres applicatives gérables (exclusion des barres d'outils, infobulles, fenêtres masquées ou sans titre).
+- **Recherche & Indexation instantanée** : détection automatique des applications installées (Menu Démarrer, registre `App Paths`, commandes système courantes).
+- **Navigation & URLs directes** : saisie directe d'adresses web ou de commandes système.
+- **Thèmes & Personnalisation** : support de plusieurs thèmes intégrés (`system`, `dark`, `light`, `cyberpunk`, `dracula`) et opacité réglable via fichier INI (`klypr.ini`) ou directement dans le lanceur.
 - **Contrôle au clavier** : interception globale via des hooks Windows de bas niveau.
 - **Raccourcis par défaut** :
-  - `Ctrl` + `A` : Afficher / masquer le sélecteur d'application rapide style terminal.
+  - `Ctrl` + `A` : Afficher / masquer la barre de lancement rapide.
   - `Alt` + `Entrée` : Lancer le terminal Windows (`wt.exe`).
   - `Alt` + `Shift` + `Q` : Quitter Klypr proprement.
 
@@ -27,24 +28,19 @@ Il organise automatiquement vos fenêtres sous la forme d'un arbre binaire (*Bin
 │       └── build.yml
 ├── include/
 │   ├── app.h          # Cycle de vie global de l'application
-│   ├── config.h       # Configuration générale (espacements, bordures)
-│   ├── event.h        # Hooks WinEvent (détection des ouvertures/fermetures)
+│   ├── config.h       # Configuration générale (thèmes, opacité)
 │   ├── input.h        # Hooks clavier bas niveau WH_KEYBOARD_LL
-│   ├── launcher.h     # Sélecteur d'application style terminal
-│   ├── layout.h       # Définition de l'arbre BSP et agencement
-│   └── window.h       # Filtrage et détection des fenêtres gérables
+│   └── launcher.h     # Sélecteur d'application style terminal / barre rapide
 ├── src/
 │   ├── app.c
 │   ├── config.c
-│   ├── event.c
 │   ├── input.c
 │   ├── launcher.c
-│   ├── layout.c
-│   ├── main.c         # Point d'entrée WinMain
-│   └── window.c
+│   └── main.c         # Point d'entrée WinMain
 ├── .gitignore
 ├── CMakeLists.txt
 ├── Makefile
+├── klypr.ini
 └── README.md
 ```
 
