@@ -26,6 +26,7 @@ typedef struct {
     int opacity;
     bool autostart;
     wchar_t terminal[MAX_PATH];
+    wchar_t search_engine[ALIAS_TARGET_LEN];
     AliasEntry aliases[MAX_ALIASES];
     int alias_count;
 } AppConfig;
@@ -37,6 +38,7 @@ void config_cleanup(void);
 void config_set_theme(ThemeType theme);
 void config_set_autostart(bool enabled);
 void config_set_terminal(const wchar_t *terminal);
+void config_set_search_engine(const wchar_t *engine);
 void config_save(void);
 const wchar_t *config_theme_to_string(ThemeType theme);
 ThemeType config_string_to_theme(const wchar_t *str);

@@ -458,6 +458,59 @@ static int compute_fuzzy_score(const wchar_t *pattern, const wchar_t *str)
     return (final_score > 1) ? final_score : 1;
 }
 
+static HICON get_default_browser_icon(void)
+{
+    static wchar_t s_cached_browser_exe[MAX_PATH] = {0};
+    static bool s_checked_browser = false;
+
+    if (!s_checked_browser) {
+        s_checked_browser = true;
+        HKEY hKey;
+        wchar_t prog_id[128] = {0};
+        DWORD size = sizeof(prog_id);
+        if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\Shell\\Associations\\UrlAssociations\\https\\UserChoice", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+            DWORD type = REG_SZ;
+            RegQueryValueExW(hKey, L"ProgId", NULL, &type, (LPBYTE)prog_id, &size);
+            RegCloseKey(hKey);
+        }
+        if (prog_id[0] != L'\0') {
+            wchar_t cmd_key[256];
+            _snwprintf(cmd_key, sizeof(cmd_key) / sizeof(cmd_key[0]), L"%s\\shell\\open\\command", prog_id);
+            if (RegOpenKeyExW(HKEY_CLASSES_ROOT, cmd_key, 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+                wchar_t cmd_val[MAX_PATH];
+                size = sizeof(cmd_val);
+                if (RegQueryValueExW(hKey, NULL, NULL, NULL, (LPBYTE)cmd_val, &size) == ERROR_SUCCESS) {
+                    if (cmd_val[0] == L'"') {
+                        wchar_t *end_q = wcschr(cmd_val + 1, L'"');
+                        if (end_q != NULL) {
+                            *end_q = L'\0';
+                            wcsncpy(s_cached_browser_exe, cmd_val + 1, MAX_PATH - 1);
+                        }
+                    } else {
+                        wchar_t *space = wcschr(cmd_val, L' ');
+                        if (space != NULL) *space = L'\0';
+                        wcsncpy(s_cached_browser_exe, cmd_val, MAX_PATH - 1);
+                    }
+                }
+                RegCloseKey(hKey);
+            }
+        }
+    }
+
+    if (s_cached_browser_exe[0] != L'\0') {
+        HICON h = NULL;
+        if (ExtractIconExW(s_cached_browser_exe, 0, NULL, &h, 1) > 0 && h != NULL) {
+            return h;
+        }
+    }
+
+    HICON h = NULL;
+    if (ExtractIconExW(L"shell32.dll", 13, NULL, &h, 1) > 0 && h != NULL) {
+        return h;
+    }
+    return NULL;
+}
+
 static HICON resolve_icon(const wchar_t *raw_target, bool is_action)
 {
     if (raw_target == NULL || raw_target[0] == L'\0') {
@@ -529,8 +582,8 @@ static HICON resolve_icon(const wchar_t *raw_target, bool is_action)
 
     // 2. Web URLs
     if (wcs_starts_with_ci(raw_target, L"http://") || wcs_starts_with_ci(raw_target, L"https://") || wcs_starts_with_ci(raw_target, L"www.")) {
-        HICON h = NULL;
-        if (ExtractIconExW(L"shell32.dll", 13, NULL, &h, 1) > 0 && h != NULL) {
+        HICON h = get_default_browser_icon();
+        if (h != NULL) {
             return h;
         }
     }
@@ -948,6 +1001,23 @@ static void url_encode(const wchar_t *src, wchar_t *dst, size_t dst_size)
         src++;
     }
     dst[d] = L'\0';
+}
+
+static void get_web_search_url(const wchar_t *query, wchar_t *out_url, size_t out_url_size)
+{
+    if (query == NULL || out_url == NULL || out_url_size == 0) {
+        return;
+    }
+    wchar_t encoded[ALIAS_TARGET_LEN];
+    url_encode(query, encoded, ALIAS_TARGET_LEN);
+
+    const wchar_t *engine = (g_config.search_engine[0] != L'\0') ? g_config.search_engine : L"https://www.google.com/search?q=%s";
+    if (wcsstr(engine, L"%s") != NULL) {
+        _snwprintf(out_url, out_url_size, engine, encoded);
+    } else {
+        _snwprintf(out_url, out_url_size, L"https://www.google.com/search?q=%s", encoded);
+    }
+    out_url[out_url_size - 1] = L'\0';
 }
 
 static void unquote_str(wchar_t *str)
@@ -1450,7 +1520,8 @@ static void filter_apps(const wchar_t *query)
     // 3. Instant Calculator evaluation
     double calc_val = 0;
     wchar_t calc_res[64];
-    if (calc_evaluate(query, &calc_val, calc_res, sizeof(calc_res) / sizeof(calc_res[0]))) {
+    bool is_calc = calc_evaluate(query, &calc_val, calc_res, sizeof(calc_res) / sizeof(calc_res[0]));
+    if (is_calc) {
         wchar_t calc_title[128];
         _snwprintf(calc_title, sizeof(calc_title) / sizeof(calc_title[0]), L"= %s", calc_res);
 
@@ -1618,12 +1689,36 @@ static void filter_apps(const wchar_t *query)
         }
     }
 
-    // 4. URL fallback if no matches
+    // 4. URL or Web search fallback
+    wchar_t clean_q[256];
+    wcsncpy(clean_q, query, 255);
+    clean_q[255] = L'\0';
+    size_t qend = wcslen(clean_q);
+    while (qend > 0 && (clean_q[qend - 1] == L' ' || clean_q[qend - 1] == L'\t')) {
+        clean_q[--qend] = L'\0';
+    }
+
     if (s_match_count == 0) {
         wchar_t normalized_url[MAX_PATH];
-        if (is_likely_url(query, normalized_url, MAX_PATH)) {
+        if (is_likely_url(clean_q, normalized_url, MAX_PATH)) {
             add_dynamic_match(normalized_url, normalized_url, L"Navigateur Web", 1000);
+        } else if (clean_q[0] != L':' && clean_q[0] != L'=' && !is_calc) {
+            wchar_t search_url[ALIAS_TARGET_LEN * 2];
+            get_web_search_url(clean_q, search_url, sizeof(search_url) / sizeof(search_url[0]));
+
+            wchar_t search_title[256];
+            _snwprintf(search_title, sizeof(search_title) / sizeof(search_title[0]), L"Rechercher sur le Web : \"%s\"", clean_q);
+
+            add_dynamic_match(search_title, search_url, L"Ouvrir dans le navigateur par d\u00e9faut", 1000);
         }
+    } else if (s_match_count < MAX_MATCHES && clean_q[0] != L':' && clean_q[0] != L'=' && !is_calc) {
+        wchar_t search_url[ALIAS_TARGET_LEN * 2];
+        get_web_search_url(clean_q, search_url, sizeof(search_url) / sizeof(search_url[0]));
+
+        wchar_t search_title[256];
+        _snwprintf(search_title, sizeof(search_title) / sizeof(search_title[0]), L"Rechercher \"%s\" sur le Web", clean_q);
+
+        add_dynamic_match(search_title, search_url, L"Ouvrir dans le navigateur par d\u00e9faut", 50);
     }
 }
 
@@ -1877,7 +1972,17 @@ static void execute_command(const wchar_t *input)
         }
     }
 
-    // 3. Fallback to cmd.exe /c start "" <command>
+    // 3. Fallback: if not found in PATH or system, search the web in default browser
+    wchar_t found_path[MAX_PATH];
+    if (SearchPathW(NULL, cmd, L".exe", MAX_PATH, found_path, NULL) == 0 &&
+        SearchPathW(NULL, cmd, NULL, MAX_PATH, found_path, NULL) == 0) {
+        wchar_t search_url[ALIAS_TARGET_LEN * 2];
+        get_web_search_url(input, search_url, sizeof(search_url) / sizeof(search_url[0]));
+        ShellExecuteW(NULL, L"open", search_url, NULL, NULL, SW_SHOWNORMAL);
+        return;
+    }
+
+    // 4. Fallback to cmd.exe /c start "" <command>
     wchar_t cmd_args[1024];
     _snwprintf(cmd_args, sizeof(cmd_args) / sizeof(cmd_args[0]), L"/c start \"\" %s", input);
     ShellExecuteW(NULL, L"open", L"cmd.exe", cmd_args, NULL, SW_HIDE);

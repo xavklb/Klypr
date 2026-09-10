@@ -6,7 +6,8 @@ AppConfig g_config = {
     .theme = THEME_SYSTEM,
     .opacity = 95,
     .autostart = true,
-    .terminal = L"wt.exe"
+    .terminal = L"wt.exe",
+    .search_engine = L"https://www.google.com/search?q=%s"
 };
 
 static wchar_t s_ini_path[MAX_PATH] = {0};
@@ -102,6 +103,7 @@ bool config_init(void)
     if (g_config.opacity > 100) g_config.opacity = 100;
 
     GetPrivateProfileStringW(L"General", L"terminal", L"wt.exe", g_config.terminal, MAX_PATH - 1, s_ini_path);
+    GetPrivateProfileStringW(L"General", L"search_engine", L"https://www.google.com/search?q=%s", g_config.search_engine, ALIAS_TARGET_LEN - 1, s_ini_path);
 
     wchar_t theme_buf[64] = {0};
     GetPrivateProfileStringW(L"Theme", L"theme", L"system", theme_buf, 63, s_ini_path);
@@ -128,6 +130,7 @@ void config_save(void)
 
     WritePrivateProfileStringW(L"General", L"autostart", g_config.autostart ? L"1" : L"0", s_ini_path);
     WritePrivateProfileStringW(L"General", L"terminal", g_config.terminal, s_ini_path);
+    WritePrivateProfileStringW(L"General", L"search_engine", g_config.search_engine, s_ini_path);
 
     WritePrivateProfileStringW(L"Theme", L"theme", config_theme_to_string(g_config.theme), s_ini_path);
 
@@ -157,6 +160,15 @@ void config_set_terminal(const wchar_t *terminal)
     if (terminal != NULL) {
         wcsncpy(g_config.terminal, terminal, MAX_PATH - 1);
         g_config.terminal[MAX_PATH - 1] = L'\0';
+        config_save();
+    }
+}
+
+void config_set_search_engine(const wchar_t *engine)
+{
+    if (engine != NULL && engine[0] != L'\0') {
+        wcsncpy(g_config.search_engine, engine, ALIAS_TARGET_LEN - 1);
+        g_config.search_engine[ALIAS_TARGET_LEN - 1] = L'\0';
         config_save();
     }
 }

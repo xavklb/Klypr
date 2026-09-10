@@ -72,13 +72,22 @@ Effectuez des calculs mathématiques en temps réel directement dans la barre de
   - `Entrée` : **Copie instantanément** le résultat dans le presse-papier Windows.
   - `Tab` : **Réutilise le résultat** directement dans le champ de saisie pour enchaîner les calculs.
 
-### 5. Lancement Rapide du Terminal
+### 5. Recherche Web Automatique & Repli Navigateur
+Si vous tapez un nom d'application non installée, un mot-clé ou une requête qu'aucun fichier ou raccourci local ne peut satisfaire :
+- **Repli instantané sur la recherche web** : dès qu'aucun résultat local n'est trouvé, Klypr sélectionne immédiatement l'action `Rechercher sur le Web : "<terme>"`.
+- **Zéro boîte de dialogue d'erreur** : remplace avantageusement les popups d'erreur Windows du type *"Windows ne trouve pas..."*.
+- **Icône dynamique du navigateur par défaut** : Klypr détecte automatiquement votre navigateur par défaut (Edge, Chrome, Firefox, Brave...) et affiche son icône native dans la liste des résultats.
+- **Validation au clavier** : appuyer simplement sur `Entrée` ouvre instantanément votre navigateur par défaut avec la recherche pré-remplie.
+- **Accès volontaire en bas de liste** : si des résultats locaux existent (ex: `code`), l'option de recherche web reste proposée en bas de la liste pour vous permettre de basculer sur le web en quelques flèches bas.
+- **Moteur de recherche entièrement configurable** : paramétrez votre moteur favori (Google, DuckDuckGo, Bing, Qwant...) dans `klypr.ini` via la clé `search_engine`.
+
+### 6. Lancement Rapide du Terminal
 - Raccourci global `Alt` + `Entrée` géré nativement via l'API noyau `RegisterHotKey` (aucun conflit, réactivité instantanée).
 - Configurable dans `klypr.ini` via la clé `terminal` (ex: `wt.exe`, `powershell.exe`, `cmd.exe`, `bash.exe`...).
 - Chaîne de repli automatique robuste :
   `terminal défini` ➔ `Windows Terminal (wt.exe)` ➔ `Package Windows Terminal AppX` ➔ `PowerShell` ➔ `CMD`.
 
-### 6. Thèmes & Effets Visuels
+### 7. Thèmes & Effets Visuels
 - 5 thèmes intégrés :
   - **Système (Auto)** : s'adapte automatiquement au mode sombre / clair de Windows.
   - **Fluent Dark** : design sombre moderne translucide.
@@ -88,11 +97,11 @@ Effectuez des calculs mathématiques en temps réel directement dans la barre de
 - Effet Acrylic / Mica avec double-buffering GDI (rendu fluide et sans aucun scintillement).
 - Changement de thème directement depuis le lanceur en tapant `thème`.
 
-### 7. Lancement au Démarrage
+### 8. Lancement au Démarrage
 - Synchronisation native avec le registre Windows (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`).
 - Activé par défaut, désactivable via `klypr.ini` ou directement en tapant `démarrage` dans Klypr.
 
-### 8. Icône dans la Zone de Notification (Systray) & Menu Contextuel
+### 9. Icône dans la Zone de Notification (Systray) & Menu Contextuel
 Klypr s'intègre discrètement et élégamment dans la zone de notification de la barre des tâches Windows :
 - **Icône dédiée haute définition** : badge moderne aux couleurs de Klypr s'adaptant à la résolution et au DPI de votre écran.
 - **Clic gauche ou double-clic** : affiche ou masque instantanément la barre de recherche (`Ctrl+A`).
@@ -118,6 +127,10 @@ autostart = 1
 # Terminal à ouvrir avec Alt+Entrée (ex: wt.exe, powershell.exe, cmd.exe, bash.exe)
 # Repli automatique : wt.exe -> Package AppX -> PowerShell -> CMD
 terminal = wt.exe
+
+# Moteur de recherche web par défaut lorsqu'aucun résultat local n'est trouvé
+# Ex: Google, DuckDuckGo (https://duckduckgo.com/?q=%s), Bing, Qwant...
+search_engine = https://www.google.com/search?q=%s
 
 [Theme]
 # Thème visuel : system, dark, light, cyberpunk, dracula
