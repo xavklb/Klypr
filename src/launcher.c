@@ -6,6 +6,7 @@
 #include <string.h>
 #include <wchar.h>
 #include <wctype.h>
+#include <stdint.h>
 #include <shellapi.h>
 #include <dwmapi.h>
 
@@ -131,6 +132,20 @@ static const struct {
     { L"Th\u00e8me: Clair (Fluent Light)", L"__theme:2", L"Design moderne clair et translucide" },
     { L"Th\u00e8me: Cyberpunk (Terminal)", L"__theme:3", L"Terminal hacker vert n\u00e9on sur fond noir" },
     { L"Th\u00e8me: Dracula (Violet)", L"__theme:4", L"Th\u00e8me d\u00e9veloppeur violet et cyan" }
+};
+
+static const struct {
+    const wchar_t *name;
+    const wchar_t *target;
+    const wchar_t *desc;
+} s_power_actions[] = {
+    { L"Verrouiller la session (Lock)", L"__sys:lock", L"Verrouille la session Windows (:lock)" },
+    { L"Mettre en veille (Sleep)", L"__sys:sleep", L"Met l'ordinateur en veille (:sleep)" },
+    { L"Veille prolong\u00e9e (Hibernate)", L"__sys:hibernate", L"Met l'ordinateur en veille prolong\u00e9e (:hibernate)" },
+    { L"Red\u00e9marrer le PC (Restart / Reboot)", L"__sys:restart", L"Red\u00e9marre Windows imm\u00e9diatement (:restart, :reboot)" },
+    { L"\u00c9teindre le PC (Shutdown / Arr\u00eat)", L"__sys:shutdown", L"\u00c9teint l'ordinateur imm\u00e9diatement (:shutdown)" },
+    { L"D\u00e9connexion (Log off / Sign out)", L"__sys:logout", L"Ferme la session utilisateur (:logout)" },
+    { L"Vider la corbeille (Empty Recycle Bin)", L"__sys:emptybin", L"Supprime les fichiers de la corbeille (:emptybin, trash)" }
 };
 
 static bool is_system_dark_theme(void)
@@ -479,6 +494,26 @@ static HICON resolve_icon(const wchar_t *raw_target, bool is_action)
             if (ExtractIconExW(L"shell32.dll", 131, NULL, &h, 1) > 0 && h != NULL) {
                 return h;
             }
+        } else if (wcsncmp(raw_target, L"__sys:", 6) == 0 || raw_target[0] == L':') {
+            const wchar_t *sub = (raw_target[0] == L':') ? (raw_target + 1) : (raw_target + 6);
+            int icon_idx = 27;
+            if (_wcsicmp(sub, L"lock") == 0) {
+                icon_idx = 47;
+            } else if (_wcsicmp(sub, L"sleep") == 0 || _wcsicmp(sub, L"hibernate") == 0) {
+                icon_idx = 33;
+            } else if (_wcsicmp(sub, L"restart") == 0 || _wcsicmp(sub, L"reboot") == 0) {
+                icon_idx = 238;
+            } else if (_wcsicmp(sub, L"shutdown") == 0) {
+                icon_idx = 27;
+            } else if (_wcsicmp(sub, L"logout") == 0) {
+                icon_idx = 44;
+            } else if (_wcsicmp(sub, L"emptybin") == 0 || _wcsicmp(sub, L"trash") == 0) {
+                icon_idx = 32;
+            }
+            HICON h = NULL;
+            if (ExtractIconExW(L"shell32.dll", icon_idx, NULL, &h, 1) > 0 && h != NULL) {
+                return h;
+            }
         }
     }
 
@@ -735,6 +770,11 @@ static void index_all_applications(void)
         add_app_entry(L"D\u00e9marrage: D\u00e9sactiver au d\u00e9marrage de Windows", L"__autostart:0", L"D\u00e9sactiver le lancement automatique", true);
     } else {
         add_app_entry(L"D\u00e9marrage: Activer au d\u00e9marrage de Windows", L"__autostart:1", L"Lancer Klypr au d\u00e9marrage de Windows", true);
+    }
+
+    // Power and System Actions
+    for (size_t i = 0; i < sizeof(s_power_actions) / sizeof(s_power_actions[0]); i++) {
+        add_app_entry(s_power_actions[i].name, s_power_actions[i].target, s_power_actions[i].desc, true);
     }
 
     // 2. Add User-defined Aliases (take precedence over shortcuts)
@@ -1399,6 +1439,10 @@ static void filter_apps(const wchar_t *query)
 
     // 3. Normal search in indexed apps, actions and aliases
     size_t qlen = wcslen(query);
+    const wchar_t *app_q = (query[0] == L':' && query[1] != L'\0') ? (query + 1) : query;
+    size_t app_qlen = wcslen(app_q);
+    bool allow_app_search = (query[0] != L':' || query[1] != L'\0');
+
     for (int i = 0; i < s_app_count; i++) {
         int score = 0;
         const wchar_t *name = s_apps[i].name;
@@ -1406,55 +1450,76 @@ static void filter_apps(const wchar_t *query)
         bool is_alias = (wcsncmp(s_apps[i].desc, L"Alias", 5) == 0);
 
         if (s_apps[i].is_action) {
-            if (_wcsicmp(name, query) == 0) {
-                score = 2500;
-            } else if (wcs_starts_with_ci(name, query)) {
-                score = 1500 - (int)(nlen - qlen);
-            } else if (wcs_contains_ci(name, query) || wcs_contains_ci(s_apps[i].desc, query)) {
-                score = 1100 - (int)(nlen - qlen);
-            } else {
-                int fz = compute_fuzzy_score(query, name);
-                if (fz > 0) {
-                    score = fz;
+            bool is_sys = (wcsncmp(s_apps[i].target, L"__sys:", 6) == 0);
+            const wchar_t *sys_cmd = is_sys ? (s_apps[i].target + 6) : NULL;
+            const wchar_t *sys_colon_cmd = is_sys ? (s_apps[i].target + 5) : NULL;
+
+            if (is_sys) {
+                bool is_reboot_alias = (wcscmp(sys_cmd, L"restart") == 0 &&
+                    (_wcsicmp(query, L"reboot") == 0 || _wcsicmp(query, L":reboot") == 0));
+                bool is_trash_alias = (wcscmp(sys_cmd, L"emptybin") == 0 &&
+                    (_wcsicmp(query, L"trash") == 0 || _wcsicmp(query, L":trash") == 0));
+                if (_wcsicmp(query, sys_cmd) == 0 || _wcsicmp(query, sys_colon_cmd) == 0 ||
+                    is_reboot_alias || is_trash_alias) {
+                    score = 3500;
+                } else if (wcs_starts_with_ci(sys_cmd, query) || wcs_starts_with_ci(sys_colon_cmd, query)) {
+                    score = 2600 - (int)(wcslen(sys_cmd) - qlen) * 5;
                 }
             }
-        } else if (is_alias) {
-            if (_wcsicmp(name, query) == 0) {
+
+            if (score == 0) {
+                if (_wcsicmp(query, L":") == 0) {
+                    score = 2500 - i;
+                } else if (_wcsicmp(name, query) == 0) {
+                    score = 2500;
+                } else if (wcs_starts_with_ci(name, query)) {
+                    score = 1500 - (int)(nlen - qlen);
+                } else if (wcs_contains_ci(name, query) || wcs_contains_ci(s_apps[i].desc, query)) {
+                    score = 1200 - (int)(nlen - qlen);
+                } else {
+                    int fz = compute_fuzzy_score(query, name);
+                    if (fz > 0) {
+                        score = fz;
+                    }
+                }
+            }
+        } else if (allow_app_search && is_alias) {
+            if (_wcsicmp(name, app_q) == 0) {
                 score = 3000;
-            } else if (wcs_starts_with_ci(name, query)) {
-                score = 2400 - (int)(nlen - qlen) * 2;
-            } else if (wcs_contains_ci(name, query)) {
-                score = 1600 - (int)(nlen - qlen) * 2;
-            } else if (wcs_contains_ci(s_apps[i].target, query)) {
+            } else if (wcs_starts_with_ci(name, app_q)) {
+                score = 2400 - (int)(nlen - app_qlen) * 2;
+            } else if (wcs_contains_ci(name, app_q)) {
+                score = 1600 - (int)(nlen - app_qlen) * 2;
+            } else if (wcs_contains_ci(s_apps[i].target, app_q)) {
                 score = 1200;
             } else {
-                int fz = compute_fuzzy_score(query, name);
+                int fz = compute_fuzzy_score(app_q, name);
                 if (fz > 0) {
                     score = 1000 + (fz - 700) / 2;
                 }
             }
-        } else {
+        } else if (allow_app_search) {
             const wchar_t *fname = wcsrchr(s_apps[i].target, L'\\');
             fname = (fname != NULL) ? (fname + 1) : s_apps[i].target;
             size_t flen = wcslen(fname);
 
             // 1. Exact match on name or fname (or fname without .exe)
-            if (_wcsicmp(name, query) == 0) {
+            if (_wcsicmp(name, app_q) == 0) {
                 score = 2800;
-            } else if (_wcsicmp(fname, query) == 0) {
+            } else if (_wcsicmp(fname, app_q) == 0) {
                 score = 2750;
             } else if (wcs_ends_with_ci(fname, L".exe") &&
-                       _wcsnicmp(fname, query, qlen) == 0 &&
-                       fname[qlen] == L'.') {
+                       _wcsnicmp(fname, app_q, app_qlen) == 0 &&
+                       fname[app_qlen] == L'.') {
                 score = 2750;
             }
             // 2. Starts with on name
-            else if (wcs_starts_with_ci(name, query)) {
-                score = 2200 - (int)(nlen - qlen) * 2;
+            else if (wcs_starts_with_ci(name, app_q)) {
+                score = 2200 - (int)(nlen - app_qlen) * 2;
             }
             // 3. Starts with on fname (e.g. wt.exe, chrome.exe)
-            else if (wcs_starts_with_ci(fname, query)) {
-                score = 2000 - (int)(flen - qlen) * 2;
+            else if (wcs_starts_with_ci(fname, app_q)) {
+                score = 2000 - (int)(flen - app_qlen) * 2;
             }
             // 4. Word boundary match on name (e.g. "Google Chrome" matching "Chrome")
             else {
@@ -1463,8 +1528,8 @@ static void filter_apps(const wchar_t *query)
                     while (*p == L' ' || *p == L'-' || *p == L'_') {
                         p++;
                     }
-                    if (wcs_starts_with_ci(p, query)) {
-                        score = 1700 - (int)(nlen - qlen) * 2;
+                    if (wcs_starts_with_ci(p, app_q)) {
+                        score = 1700 - (int)(nlen - app_qlen) * 2;
                         break;
                     }
                     while (*p != L'\0' && *p != L' ' && *p != L'-' && *p != L'_') {
@@ -1473,21 +1538,21 @@ static void filter_apps(const wchar_t *query)
                 }
 
                 // 5. Substring match in name
-                if (score == 0 && wcs_contains_ci(name, query)) {
-                    score = 1300 - (int)(nlen - qlen) * 2;
+                if (score == 0 && wcs_contains_ci(name, app_q)) {
+                    score = 1300 - (int)(nlen - app_qlen) * 2;
                 }
                 // 6. Substring match in target or fname
-                else if (score == 0 && (wcs_contains_ci(fname, query) || wcs_contains_ci(s_apps[i].target, query))) {
+                else if (score == 0 && (wcs_contains_ci(fname, app_q) || wcs_contains_ci(s_apps[i].target, app_q))) {
                     score = 1000;
                 }
                 // 7. Fuzzy match on name
                 else if (score == 0) {
-                    int fz = compute_fuzzy_score(query, name);
+                    int fz = compute_fuzzy_score(app_q, name);
                     if (fz > 0) {
                         score = fz;
                     } else {
                         // 8. Fuzzy match on fname
-                        int fz_fn = compute_fuzzy_score(query, fname);
+                        int fz_fn = compute_fuzzy_score(app_q, fname);
                         if (fz_fn > 0) {
                             score = fz_fn - 50;
                         }
@@ -1561,6 +1626,20 @@ static void update_launcher_height(void)
     InvalidateRect(s_hwnd_launcher, NULL, FALSE);
 }
 
+static void enable_shutdown_privilege(void)
+{
+    HANDLE hToken;
+    if (OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &hToken)) {
+        TOKEN_PRIVILEGES tp;
+        if (LookupPrivilegeValueW(NULL, L"SeShutdownPrivilege", &tp.Privileges[0].Luid)) {
+            tp.PrivilegeCount = 1;
+            tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+            AdjustTokenPrivileges(hToken, FALSE, &tp, 0, NULL, 0);
+        }
+        CloseHandle(hToken);
+    }
+}
+
 static void execute_command(const wchar_t *input)
 {
     if (input == NULL) {
@@ -1620,6 +1699,53 @@ static void execute_command(const wchar_t *input)
         bool enable = (input[12] == L'1');
         config_set_autostart(enable);
         index_all_applications();
+        return;
+    }
+
+    // Check if this is an internal system power/control action
+    if (wcsncmp(input, L"__sys:", 6) == 0 ||
+        _wcsicmp(input, L":lock") == 0 ||
+        _wcsicmp(input, L":sleep") == 0 ||
+        _wcsicmp(input, L":hibernate") == 0 ||
+        _wcsicmp(input, L":restart") == 0 || _wcsicmp(input, L":reboot") == 0 ||
+        _wcsicmp(input, L":shutdown") == 0 ||
+        _wcsicmp(input, L":logout") == 0 ||
+        _wcsicmp(input, L":emptybin") == 0) {
+
+        const wchar_t *action = input;
+        if (wcsncmp(action, L"__sys:", 6) == 0) {
+            action += 6;
+        } else if (*action == L':') {
+            action += 1;
+        }
+
+        if (_wcsicmp(action, L"lock") == 0) {
+            LockWorkStation();
+        } else if (_wcsicmp(action, L"sleep") == 0) {
+            enable_shutdown_privilege();
+            HMODULE hPowr = LoadLibraryW(L"powrprof.dll");
+            if (hPowr != NULL) {
+                typedef BOOLEAN (WINAPI *SetSuspendStateFn)(BOOLEAN, BOOLEAN, BOOLEAN);
+                SetSuspendStateFn pSetSuspendState = (SetSuspendStateFn)(uintptr_t)GetProcAddress(hPowr, "SetSuspendState");
+                if (pSetSuspendState != NULL) {
+                    pSetSuspendState(FALSE, FALSE, FALSE);
+                }
+                FreeLibrary(hPowr);
+            }
+        } else if (_wcsicmp(action, L"hibernate") == 0) {
+            enable_shutdown_privilege();
+            ShellExecuteW(NULL, L"open", L"shutdown.exe", L"/h", NULL, SW_HIDE);
+        } else if (_wcsicmp(action, L"restart") == 0 || _wcsicmp(action, L"reboot") == 0) {
+            enable_shutdown_privilege();
+            ShellExecuteW(NULL, L"open", L"shutdown.exe", L"/r /t 0", NULL, SW_HIDE);
+        } else if (_wcsicmp(action, L"shutdown") == 0) {
+            enable_shutdown_privilege();
+            ShellExecuteW(NULL, L"open", L"shutdown.exe", L"/s /t 0", NULL, SW_HIDE);
+        } else if (_wcsicmp(action, L"logout") == 0) {
+            ShellExecuteW(NULL, L"open", L"shutdown.exe", L"/l", NULL, SW_HIDE);
+        } else if (_wcsicmp(action, L"emptybin") == 0) {
+            SHEmptyRecycleBinW(NULL, NULL, 0);
+        }
         return;
     }
 
@@ -1777,6 +1903,13 @@ static LRESULT CALLBACK edit_subclass_proc(HWND hwnd, UINT uMsg, WPARAM wParam, 
                             SetWindowTextW(hwnd, cur_buf);
                             SendMessageW(hwnd, EM_SETSEL, cur_len + 1, cur_len + 1);
                         }
+                        return 0;
+                    } else if (wcsncmp(entry->target, L"__sys:", 6) == 0) {
+                        wchar_t tab_buf[32];
+                        _snwprintf(tab_buf, sizeof(tab_buf)/sizeof(tab_buf[0]), L":%s", entry->target + 6);
+                        SetWindowTextW(hwnd, tab_buf);
+                        int len = (int)wcslen(tab_buf);
+                        SendMessageW(hwnd, EM_SETSEL, len, len);
                         return 0;
                     }
 

@@ -42,13 +42,30 @@ Conçu pour une productivité maximale au clavier, il offre un design moderne tr
   - Possibilité d'utiliser `%s` dans la cible pour injecter des paramètres (ex: recherche web `g = https://google.com/search?q=%s`).
   - Taper `g programmation c` dans Klypr effectue directement la recherche web encodée dans votre navigateur par défaut.
 
-### 3. Lancement Rapide du Terminal
+### 3. Commandes Système et d'Alimentation
+Contrôlez rapidement votre PC et votre session Windows directement depuis la barre Klypr :
+
+| Commande | Action | Description |
+|---|---|---|
+| `:lock` (ou `lock`) | **Verrouiller** | Verrouille instantanément la session Windows (`Win+L`) |
+| `:sleep` (ou `sleep`, `veille`) | **Mise en veille** | Place le système en mode veille |
+| `:hibernate` (ou `hibernate`) | **Veille prolongée** | Met l'ordinateur en veille prolongée |
+| `:restart` (ou `reboot`, `redémarrer`) | **Redémarrer** | Redémarre l'ordinateur proprement et immédiatement |
+| `:shutdown` (ou `éteindre`, `arrêt`) | **Arrêter** | Éteint le système immédiatement |
+| `:logout` (ou `déconnexion`) | **Déconnexion** | Ferme la session utilisateur courante |
+| `:emptybin` (ou `corbeille`, `trash`) | **Vider la corbeille** | Vide les corbeilles de tous les disques avec confirmation native |
+
+- **Découverte rapide** : tapez simplement `:` pour lister toutes les commandes disponibles.
+- **Complétion `Tab`** : tapez un début de commande (ex: `:l`, `:sl`) puis appuyez sur `Tab` pour compléter automatiquement.
+- **Icônes système dédiées** : chaque action affiche l'icône système Windows correspondante (cadenas, alimentation, corbeille, redémarrage...).
+
+### 4. Lancement Rapide du Terminal
 - Raccourci global `Alt` + `Entrée` géré nativement via l'API noyau `RegisterHotKey` (aucun conflit, réactivité instantanée).
 - Configurable dans `klypr.ini` via la clé `terminal` (ex: `wt.exe`, `powershell.exe`, `cmd.exe`, `bash.exe`...).
 - Chaîne de repli automatique robuste :
   `terminal défini` ➔ `Windows Terminal (wt.exe)` ➔ `Package Windows Terminal AppX` ➔ `PowerShell` ➔ `CMD`.
 
-### 4. Thèmes & Effets Visuels
+### 5. Thèmes & Effets Visuels
 - 5 thèmes intégrés :
   - **Système (Auto)** : s'adapte automatiquement au mode sombre / clair de Windows.
   - **Fluent Dark** : design sombre moderne translucide.
@@ -58,7 +75,7 @@ Conçu pour une productivité maximale au clavier, il offre un design moderne tr
 - Effet Acrylic / Mica avec double-buffering GDI (rendu fluide et sans aucun scintillement).
 - Changement de thème directement depuis le lanceur en tapant `thème`.
 
-### 5. Lancement au Démarrage
+### 6. Lancement au Démarrage
 - Synchronisation native avec le registre Windows (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`).
 - Activé par défaut, désactivable via `klypr.ini` ou directement en tapant `démarrage` dans Klypr.
 
