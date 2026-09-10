@@ -352,6 +352,95 @@ static bool wcs_ends_with_ci(const wchar_t *str, const wchar_t *suffix)
     return true;
 }
 
+static int compute_fuzzy_score(const wchar_t *pattern, const wchar_t *str)
+{
+    if (pattern == NULL || str == NULL || *pattern == L'\0' || *str == L'\0') {
+        return 0;
+    }
+
+    size_t plen = wcslen(pattern);
+    size_t slen = wcslen(str);
+    if (plen > slen) {
+        return 0;
+    }
+
+    // Quick subsequence check
+    const wchar_t *p_check = pattern;
+    const wchar_t *s_check = str;
+    while (*p_check != L'\0' && *s_check != L'\0') {
+        if (towlower(*p_check) == towlower(*s_check)) {
+            p_check++;
+        }
+        s_check++;
+    }
+    if (*p_check != L'\0') {
+        return 0;
+    }
+
+    // Boundary-preferring greedy scan
+    int score = 0;
+    int consecutive = 0;
+    size_t s_idx = 0;
+
+    for (size_t p_idx = 0; p_idx < plen; p_idx++) {
+        wchar_t pc = towlower(pattern[p_idx]);
+        size_t best_pos = (size_t)-1;
+        int best_pos_score = -1000;
+
+        for (size_t j = s_idx; j < slen; j++) {
+            if (towlower(str[j]) == pc) {
+                int pos_score = 0;
+                bool is_wb = (j == 0) ||
+                             (str[j - 1] == L' ' || str[j - 1] == L'\t' || str[j - 1] == L'-' ||
+                              str[j - 1] == L'_' || str[j - 1] == L'.' || str[j - 1] == L'/' || str[j - 1] == L'\\') ||
+                             (iswlower(str[j - 1]) && iswupper(str[j]));
+
+                if (j == 0) {
+                    pos_score = 80;
+                } else if (is_wb) {
+                    pos_score = 60;
+                } else if (j == s_idx && consecutive > 0) {
+                    pos_score = 40;
+                } else {
+                    pos_score = 15 - (int)(j - s_idx);
+                }
+
+                if (is_wb || j == 0) {
+                    best_pos = j;
+                    best_pos_score = pos_score;
+                    break;
+                }
+
+                if (pos_score > best_pos_score) {
+                    best_pos = j;
+                    best_pos_score = pos_score;
+                }
+            }
+        }
+
+        if (best_pos == (size_t)-1) {
+            return 0;
+        }
+
+        if (best_pos == s_idx && p_idx > 0) {
+            consecutive++;
+        } else {
+            consecutive = 0;
+        }
+
+        score += best_pos_score;
+        s_idx = best_pos + 1;
+    }
+
+    int length_penalty = (int)(slen - plen);
+    if (length_penalty > 50) {
+        length_penalty = 50;
+    }
+
+    int final_score = 700 + score - length_penalty;
+    return (final_score > 1) ? final_score : 1;
+}
+
 static HICON resolve_icon(const wchar_t *raw_target, bool is_action)
 {
     if (raw_target == NULL || raw_target[0] == L'\0') {
@@ -1043,6 +1132,18 @@ static void suggest_alias_targets(const wchar_t *alias_name, const wchar_t *cibl
             else if (score == 0 && (wcs_contains_ci(fname, clean_cible) || wcs_contains_ci(app_target, clean_cible))) {
                 score = 4400;
             }
+            // Fuzzy match on app_name or fname
+            else if (score == 0) {
+                int fz = compute_fuzzy_score(clean_cible, app_name);
+                if (fz > 0) {
+                    score = 4100 + (fz - 700) / 2;
+                } else {
+                    int fz_fn = compute_fuzzy_score(clean_cible, fname);
+                    if (fz_fn > 0) {
+                        score = 4050 + (fz_fn - 700) / 2;
+                    }
+                }
+            }
         }
 
         if (score > 0) {
@@ -1074,7 +1175,7 @@ static void suggest_alias_targets(const wchar_t *alias_name, const wchar_t *cibl
         _snwprintf(action_target, sizeof(action_target)/sizeof(action_target[0]), L"__alias_add:%s:%s", disp_alias, clean_cible);
         wchar_t desc[128];
         _snwprintf(desc, sizeof(desc)/sizeof(desc[0]), L"Commande brute dans klypr.ini");
-        add_dynamic_match(title, action_target, desc, 4300);
+        add_dynamic_match(title, action_target, desc, 4000);
     }
 }
 
@@ -1305,30 +1406,65 @@ static void filter_apps(const wchar_t *query)
         bool is_alias = (wcsncmp(s_apps[i].desc, L"Alias", 5) == 0);
 
         if (s_apps[i].is_action) {
-            if (wcs_contains_ci(name, query) || wcs_contains_ci(s_apps[i].desc, query)) {
-                score = 900 - (int)(nlen - qlen);
-            }
-        } else if (is_alias) {
             if (_wcsicmp(name, query) == 0) {
                 score = 2500;
             } else if (wcs_starts_with_ci(name, query)) {
-                score = 2000 - (int)(nlen - qlen);
+                score = 1500 - (int)(nlen - qlen);
+            } else if (wcs_contains_ci(name, query) || wcs_contains_ci(s_apps[i].desc, query)) {
+                score = 1100 - (int)(nlen - qlen);
+            } else {
+                int fz = compute_fuzzy_score(query, name);
+                if (fz > 0) {
+                    score = fz;
+                }
+            }
+        } else if (is_alias) {
+            if (_wcsicmp(name, query) == 0) {
+                score = 3000;
+            } else if (wcs_starts_with_ci(name, query)) {
+                score = 2400 - (int)(nlen - qlen) * 2;
             } else if (wcs_contains_ci(name, query)) {
-                score = 1200 - (int)(nlen - qlen);
+                score = 1600 - (int)(nlen - qlen) * 2;
             } else if (wcs_contains_ci(s_apps[i].target, query)) {
-                score = 800;
+                score = 1200;
+            } else {
+                int fz = compute_fuzzy_score(query, name);
+                if (fz > 0) {
+                    score = 1000 + (fz - 700) / 2;
+                }
             }
         } else {
-            if (wcs_starts_with_ci(name, query)) {
-                score = 1000 - (int)(nlen - qlen);
-            } else {
+            const wchar_t *fname = wcsrchr(s_apps[i].target, L'\\');
+            fname = (fname != NULL) ? (fname + 1) : s_apps[i].target;
+            size_t flen = wcslen(fname);
+
+            // 1. Exact match on name or fname (or fname without .exe)
+            if (_wcsicmp(name, query) == 0) {
+                score = 2800;
+            } else if (_wcsicmp(fname, query) == 0) {
+                score = 2750;
+            } else if (wcs_ends_with_ci(fname, L".exe") &&
+                       _wcsnicmp(fname, query, qlen) == 0 &&
+                       fname[qlen] == L'.') {
+                score = 2750;
+            }
+            // 2. Starts with on name
+            else if (wcs_starts_with_ci(name, query)) {
+                score = 2200 - (int)(nlen - qlen) * 2;
+            }
+            // 3. Starts with on fname (e.g. wt.exe, chrome.exe)
+            else if (wcs_starts_with_ci(fname, query)) {
+                score = 2000 - (int)(flen - qlen) * 2;
+            }
+            // 4. Word boundary match on name (e.g. "Google Chrome" matching "Chrome")
+            else {
                 const wchar_t *p = name;
                 while (*p != L'\0') {
                     while (*p == L' ' || *p == L'-' || *p == L'_') {
                         p++;
                     }
                     if (wcs_starts_with_ci(p, query)) {
-                        score = 800 - (int)(nlen - qlen);
+                        score = 1700 - (int)(nlen - qlen) * 2;
                         break;
                     }
                     while (*p != L'\0' && *p != L' ' && *p != L'-' && *p != L'_') {
@@ -1336,10 +1472,26 @@ static void filter_apps(const wchar_t *query)
                     }
                 }
 
+                // 5. Substring match in name
                 if (score == 0 && wcs_contains_ci(name, query)) {
-                    score = 500 - (int)(nlen - qlen);
-                } else if (score == 0 && wcs_contains_ci(s_apps[i].target, query)) {
-                    score = 300;
+                    score = 1300 - (int)(nlen - qlen) * 2;
+                }
+                // 6. Substring match in target or fname
+                else if (score == 0 && (wcs_contains_ci(fname, query) || wcs_contains_ci(s_apps[i].target, query))) {
+                    score = 1000;
+                }
+                // 7. Fuzzy match on name
+                else if (score == 0) {
+                    int fz = compute_fuzzy_score(query, name);
+                    if (fz > 0) {
+                        score = fz;
+                    } else {
+                        // 8. Fuzzy match on fname
+                        int fz_fn = compute_fuzzy_score(query, fname);
+                        if (fz_fn > 0) {
+                            score = fz_fn - 50;
+                        }
+                    }
                 }
             }
         }
