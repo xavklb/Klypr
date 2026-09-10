@@ -874,6 +874,11 @@ static LRESULT CALLBACK launcher_wnd_proc(HWND hwnd, UINT uMsg, WPARAM wParam, L
         break;
     }
 
+    case WM_KLYPR_SHOW: {
+        launcher_show();
+        return 0;
+    }
+
     case WM_MOUSEMOVE: {
         int y = HIWORD(lParam);
         if (y >= BASE_HEIGHT && s_match_count > 0) {

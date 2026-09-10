@@ -14,7 +14,7 @@ int WINAPI WinMain(
     (void)nShowCmd;
 
     if (!app_init()) {
-        return 1;
+        return 0;
     }
 
     int exit_code = app_run();
