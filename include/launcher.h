@@ -11,5 +11,6 @@ void launcher_hide(void);
 void launcher_toggle(void);
 bool launcher_is_visible(void);
 HWND launcher_get_hwnd(void);
+void launcher_apply_theme(void);
 
 #endif

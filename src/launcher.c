@@ -1,21 +1,65 @@
 #include "launcher.h"
+#include "config.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
 #include <wctype.h>
 #include <shellapi.h>
+#include <dwmapi.h>
 
-#define LAUNCHER_WIDTH 580
-#define BASE_HEIGHT 54
-#define ITEM_HEIGHT 38
+#define LAUNCHER_WIDTH 600
+#define BASE_HEIGHT 56
+#define ITEM_HEIGHT 40
 #define MAX_MATCHES 6
 #define MAX_INDEXED_APPS 1024
 #define LAUNCHER_CLASS_NAME L"KlyprLauncherClass"
 
+#ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
+#define DWMWA_USE_IMMERSIVE_DARK_MODE 20
+#endif
+#ifndef DWMWA_WINDOW_CORNER_PREFERENCE
+#define DWMWA_WINDOW_CORNER_PREFERENCE 33
+#endif
+#ifndef DWMWA_SYSTEMBACKDROP_TYPE
+#define DWMWA_SYSTEMBACKDROP_TYPE 38
+#endif
+#ifndef DWMWCP_ROUND
+#define DWMWCP_ROUND 2
+#endif
+#ifndef DWMSBT_TRANSIENTWINDOW
+#define DWMSBT_TRANSIENTWINDOW 3
+#endif
+
+typedef enum {
+    ACCENT_DISABLED = 0,
+    ACCENT_ENABLE_GRADIENT = 1,
+    ACCENT_ENABLE_TRANSPARENTGRADIENT = 2,
+    ACCENT_ENABLE_BLURBEHIND = 3,
+    ACCENT_ENABLE_ACRYLICBLURBEHIND = 4,
+    ACCENT_ENABLE_HOSTBACKDROP = 5
+} ACCENT_STATE;
+
+typedef struct {
+    ACCENT_STATE AccentState;
+    DWORD AccentFlags;
+    DWORD GradientColor;
+    DWORD AnimationId;
+} ACCENT_POLICY;
+
+typedef struct {
+    DWORD Attribute;
+    PVOID Data;
+    ULONG SizeOfData;
+} WINCOMPATTRDATA;
+
+typedef BOOL (WINAPI *pfnSetWindowCompositionAttribute)(HWND, WINCOMPATTRDATA *);
+
 typedef struct {
     wchar_t name[128];
     wchar_t target[MAX_PATH];
+    wchar_t desc[64];
+    bool is_action;
 } AppEntry;
 
 typedef struct {
@@ -23,18 +67,30 @@ typedef struct {
     int score;
 } MatchEntry;
 
+typedef struct {
+    COLORREF bg_color;
+    COLORREF card_bg_color;
+    COLORREF border_color;
+    COLORREF text_primary;
+    COLORREF text_secondary;
+    COLORREF accent_color;
+    COLORREF sep_color;
+    BYTE opacity;
+    bool is_dark;
+    const wchar_t *font_name;
+    const wchar_t *prompt_symbol;
+} ThemePalette;
+
 static HWND s_hwnd_launcher = NULL;
 static HWND s_hwnd_edit = NULL;
 static WNDPROC s_old_edit_proc = NULL;
 static HFONT s_font = NULL;
 static HBRUSH s_bg_brush = NULL;
+static HBRUSH s_card_brush = NULL;
 static HBRUSH s_accent_brush = NULL;
 static HPEN s_border_pen = NULL;
 static bool s_is_visible = false;
-
-static const COLORREF COLOR_BG = RGB(22, 24, 29);
-static const COLORREF COLOR_ACCENT = RGB(0, 230, 118);
-static const COLORREF COLOR_TEXT = RGB(240, 244, 248);
+static ThemePalette s_current_theme;
 
 static AppEntry s_apps[MAX_INDEXED_APPS];
 static int s_app_count = 0;
@@ -42,6 +98,176 @@ static int s_app_count = 0;
 static MatchEntry s_matches[MAX_MATCHES];
 static int s_match_count = 0;
 static int s_selected_index = 0;
+
+static const struct {
+    const wchar_t *name;
+    const wchar_t *target;
+    const wchar_t *desc;
+} s_theme_actions[] = {
+    { L"Th\u00e8me: Syst\u00e8me (Auto Windows)", L"__theme:0", L"S'adapte automatiquement \u00e0 Windows" },
+    { L"Th\u00e8me: Sombre (Fluent Dark)", L"__theme:1", L"Design moderne sombre et translucide" },
+    { L"Th\u00e8me: Clair (Fluent Light)", L"__theme:2", L"Design moderne clair et translucide" },
+    { L"Th\u00e8me: Cyberpunk (Terminal)", L"__theme:3", L"Terminal hacker vert n\u00e9on sur fond noir" },
+    { L"Th\u00e8me: Dracula (Violet)", L"__theme:4", L"Th\u00e8me d\u00e9veloppeur violet et cyan" }
+};
+
+static bool is_system_dark_theme(void)
+{
+    HKEY hKey;
+    DWORD value = 0;
+    DWORD size = sizeof(value);
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+        if (RegQueryValueExW(hKey, L"AppsUseLightTheme", NULL, NULL, (LPBYTE)&value, &size) == ERROR_SUCCESS) {
+            RegCloseKey(hKey);
+            return value == 0;
+        }
+        RegCloseKey(hKey);
+    }
+    return true;
+}
+
+static void apply_window_blur(HWND hwnd, COLORREF bg_color, BYTE opacity, bool is_dark)
+{
+    // 1. DWM Window Attributes (Windows 11 modern rounded corners & acrylic backdrop)
+    DWORD corner_pref = DWMWCP_ROUND;
+    DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &corner_pref, sizeof(corner_pref));
+
+    DWORD dark_flag = is_dark ? 1 : 0;
+    DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark_flag, sizeof(dark_flag));
+
+    DWORD backdrop = DWMSBT_TRANSIENTWINDOW;
+    DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop, sizeof(backdrop));
+
+    // 2. SetWindowCompositionAttribute (Acrylic blur for Windows 10 & 11)
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    if (user32 != NULL) {
+        pfnSetWindowCompositionAttribute pSetWindowCompositionAttribute =
+            (pfnSetWindowCompositionAttribute)(void *)GetProcAddress(user32, "SetWindowCompositionAttribute");
+        if (pSetWindowCompositionAttribute != NULL) {
+            ACCENT_POLICY policy = {0};
+            policy.AccentState = ACCENT_ENABLE_ACRYLICBLURBEHIND;
+            BYTE a = (BYTE)(opacity > 40 ? opacity - 40 : opacity);
+            BYTE r = GetRValue(bg_color);
+            BYTE g = GetGValue(bg_color);
+            BYTE b = GetBValue(bg_color);
+            policy.GradientColor = ((DWORD)a << 24) | ((DWORD)b << 16) | ((DWORD)g << 8) | (DWORD)r;
+
+            WINCOMPATTRDATA data = {0};
+            data.Attribute = 19;
+            data.Data = &policy;
+            data.SizeOfData = sizeof(policy);
+            pSetWindowCompositionAttribute(hwnd, &data);
+        }
+    }
+
+    // 3. Layered Window Attributes (Alpha transparency)
+    SetLayeredWindowAttributes(hwnd, 0, opacity, LWA_ALPHA);
+}
+
+void launcher_apply_theme(void)
+{
+    ThemeType active = g_config.theme;
+    if (active == THEME_SYSTEM) {
+        active = is_system_dark_theme() ? THEME_DARK : THEME_LIGHT;
+    }
+
+    BYTE target_opacity = (BYTE)(g_config.opacity * 255 / 100);
+
+    switch (active) {
+    case THEME_LIGHT:
+        s_current_theme.bg_color = RGB(246, 248, 252);
+        s_current_theme.card_bg_color = RGB(225, 230, 238);
+        s_current_theme.border_color = RGB(205, 212, 222);
+        s_current_theme.text_primary = RGB(24, 28, 34);
+        s_current_theme.text_secondary = RGB(105, 115, 128);
+        s_current_theme.accent_color = RGB(0, 103, 192);
+        s_current_theme.sep_color = RGB(220, 226, 235);
+        s_current_theme.opacity = target_opacity;
+        s_current_theme.is_dark = false;
+        s_current_theme.font_name = L"Segoe UI";
+        s_current_theme.prompt_symbol = L"\u2315";
+        break;
+
+    case THEME_CYBERPUNK:
+        s_current_theme.bg_color = RGB(12, 14, 16);
+        s_current_theme.card_bg_color = RGB(18, 36, 24);
+        s_current_theme.border_color = RGB(0, 230, 118);
+        s_current_theme.text_primary = RGB(230, 255, 240);
+        s_current_theme.text_secondary = RGB(0, 190, 95);
+        s_current_theme.accent_color = RGB(0, 230, 118);
+        s_current_theme.sep_color = RGB(25, 48, 35);
+        s_current_theme.opacity = target_opacity;
+        s_current_theme.is_dark = true;
+        s_current_theme.font_name = L"Consolas";
+        s_current_theme.prompt_symbol = L">";
+        break;
+
+    case THEME_DRACULA:
+        s_current_theme.bg_color = RGB(40, 42, 54);
+        s_current_theme.card_bg_color = RGB(68, 71, 90);
+        s_current_theme.border_color = RGB(189, 147, 249);
+        s_current_theme.text_primary = RGB(248, 248, 242);
+        s_current_theme.text_secondary = RGB(139, 233, 253);
+        s_current_theme.accent_color = RGB(189, 147, 249);
+        s_current_theme.sep_color = RGB(68, 71, 90);
+        s_current_theme.opacity = target_opacity;
+        s_current_theme.is_dark = true;
+        s_current_theme.font_name = L"Segoe UI";
+        s_current_theme.prompt_symbol = L"\u2726";
+        break;
+
+    case THEME_DARK:
+    default:
+        s_current_theme.bg_color = RGB(30, 32, 38);
+        s_current_theme.card_bg_color = RGB(48, 52, 64);
+        s_current_theme.border_color = RGB(62, 66, 78);
+        s_current_theme.text_primary = RGB(246, 247, 249);
+        s_current_theme.text_secondary = RGB(150, 158, 172);
+        s_current_theme.accent_color = RGB(96, 205, 255);
+        s_current_theme.sep_color = RGB(50, 54, 66);
+        s_current_theme.opacity = target_opacity;
+        s_current_theme.is_dark = true;
+        s_current_theme.font_name = L"Segoe UI";
+        s_current_theme.prompt_symbol = L"\u2315";
+        break;
+    }
+
+    if (s_bg_brush != NULL) DeleteObject(s_bg_brush);
+    if (s_card_brush != NULL) DeleteObject(s_card_brush);
+    if (s_accent_brush != NULL) DeleteObject(s_accent_brush);
+    if (s_border_pen != NULL) DeleteObject(s_border_pen);
+    if (s_font != NULL) DeleteObject(s_font);
+
+    s_bg_brush = CreateSolidBrush(s_current_theme.bg_color);
+    s_card_brush = CreateSolidBrush(s_current_theme.card_bg_color);
+    s_accent_brush = CreateSolidBrush(s_current_theme.accent_color);
+    s_border_pen = CreatePen(PS_SOLID, 1, s_current_theme.border_color);
+
+    s_font = CreateFontW(
+        21,
+        0,
+        0,
+        0,
+        FW_NORMAL,
+        FALSE,
+        FALSE,
+        FALSE,
+        DEFAULT_CHARSET,
+        OUT_OUTLINE_PRECIS,
+        CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY,
+        DEFAULT_PITCH | FF_DONTCARE,
+        s_current_theme.font_name
+    );
+
+    if (s_hwnd_launcher != NULL) {
+        apply_window_blur(s_hwnd_launcher, s_current_theme.bg_color, s_current_theme.opacity, s_current_theme.is_dark);
+        if (s_hwnd_edit != NULL) {
+            SendMessageW(s_hwnd_edit, WM_SETFONT, (WPARAM)s_font, TRUE);
+        }
+        InvalidateRect(s_hwnd_launcher, NULL, TRUE);
+    }
+}
 
 static bool wcs_contains_ci(const wchar_t *haystack, const wchar_t *needle)
 {
@@ -86,27 +312,27 @@ static bool wcs_starts_with_ci(const wchar_t *str, const wchar_t *prefix)
     return true;
 }
 
-static void add_app_entry(const wchar_t *name, const wchar_t *target)
+static void add_app_entry(const wchar_t *name, const wchar_t *target, const wchar_t *desc, bool is_action)
 {
     if (name == NULL || target == NULL || name[0] == L'\0' || s_app_count >= MAX_INDEXED_APPS) {
         return;
     }
 
-    // Filter out common unwanted shortcuts
-    if (wcs_contains_ci(name, L"uninstall") ||
-        wcs_contains_ci(name, L"d\u00e9sinstall") ||
-        wcs_contains_ci(name, L"desinstall") ||
-        wcs_contains_ci(name, L"readme") ||
-        wcs_contains_ci(name, L"aide") ||
-        wcs_contains_ci(name, L"help") ||
-        wcs_contains_ci(name, L"website")) {
-        return;
-    }
-
-    // Avoid duplicates
-    for (int i = 0; i < s_app_count; i++) {
-        if (_wcsicmp(s_apps[i].name, name) == 0) {
+    if (!is_action) {
+        if (wcs_contains_ci(name, L"uninstall") ||
+            wcs_contains_ci(name, L"d\u00e9sinstall") ||
+            wcs_contains_ci(name, L"desinstall") ||
+            wcs_contains_ci(name, L"readme") ||
+            wcs_contains_ci(name, L"aide") ||
+            wcs_contains_ci(name, L"help") ||
+            wcs_contains_ci(name, L"website")) {
             return;
+        }
+
+        for (int i = 0; i < s_app_count; i++) {
+            if (!s_apps[i].is_action && _wcsicmp(s_apps[i].name, name) == 0) {
+                return;
+            }
         }
     }
 
@@ -114,6 +340,9 @@ static void add_app_entry(const wchar_t *name, const wchar_t *target)
     s_apps[s_app_count].name[127] = L'\0';
     wcsncpy(s_apps[s_app_count].target, target, MAX_PATH - 1);
     s_apps[s_app_count].target[MAX_PATH - 1] = L'\0';
+    wcsncpy(s_apps[s_app_count].desc, desc ? desc : L"Application", 63);
+    s_apps[s_app_count].desc[63] = L'\0';
+    s_apps[s_app_count].is_action = is_action;
     s_app_count++;
 }
 
@@ -148,7 +377,7 @@ static void scan_directory_for_shortcuts(const wchar_t *dir_path)
                 }
                 wcsncpy(base_name, fd.cFileName, name_len);
                 base_name[name_len] = L'\0';
-                add_app_entry(base_name, full_path);
+                add_app_entry(base_name, full_path, L"Application", false);
             }
         }
     } while (FindNextFileW(hFind, &fd));
@@ -186,13 +415,13 @@ static void scan_app_paths_registry(void)
                             target[tlen - 1] = L'\0';
                         }
                     }
-                    add_app_entry(clean_name, target);
+                    add_app_entry(clean_name, target, L"Application", false);
                 } else {
-                    add_app_entry(clean_name, subkey_name);
+                    add_app_entry(clean_name, subkey_name, L"Application", false);
                 }
                 RegCloseKey(hSubKey);
             } else {
-                add_app_entry(clean_name, subkey_name);
+                add_app_entry(clean_name, subkey_name, L"Application", false);
             }
 
             index++;
@@ -206,7 +435,12 @@ static void index_all_applications(void)
 {
     s_app_count = 0;
 
-    // Common Start Menu
+    // 1. Add Theme Configuration Actions
+    for (size_t i = 0; i < sizeof(s_theme_actions) / sizeof(s_theme_actions[0]); i++) {
+        add_app_entry(s_theme_actions[i].name, s_theme_actions[i].target, s_theme_actions[i].desc, true);
+    }
+
+    // 2. Start Menu shortcuts
     wchar_t prog_data[MAX_PATH];
     if (GetEnvironmentVariableW(L"ProgramData", prog_data, MAX_PATH) > 0) {
         wchar_t start_menu[MAX_PATH];
@@ -214,7 +448,6 @@ static void index_all_applications(void)
         scan_directory_for_shortcuts(start_menu);
     }
 
-    // User Start Menu
     wchar_t app_data[MAX_PATH];
     if (GetEnvironmentVariableW(L"APPDATA", app_data, MAX_PATH) > 0) {
         wchar_t user_start_menu[MAX_PATH];
@@ -222,20 +455,20 @@ static void index_all_applications(void)
         scan_directory_for_shortcuts(user_start_menu);
     }
 
-    // App Paths registry
+    // 3. App Paths Registry
     scan_app_paths_registry();
 
-    // Standard built-ins
-    add_app_entry(L"Chrome", L"chrome");
-    add_app_entry(L"Windows Terminal", L"wt.exe");
-    add_app_entry(L"Notepad", L"notepad.exe");
-    add_app_entry(L"Calculatrice", L"calc.exe");
-    add_app_entry(L"Command Prompt", L"cmd.exe");
-    add_app_entry(L"PowerShell", L"powershell.exe");
-    add_app_entry(L"VS Code", L"code");
-    add_app_entry(L"Explorer", L"explorer.exe");
-    add_app_entry(L"Gestionnaire des t\u00e2ches", L"taskmgr.exe");
-    add_app_entry(L"Paint", L"mspaint.exe");
+    // 4. Built-in system apps
+    add_app_entry(L"Chrome", L"chrome", L"Navigateur Web", false);
+    add_app_entry(L"Windows Terminal", L"wt.exe", L"Terminal", false);
+    add_app_entry(L"Notepad", L"notepad.exe", L"Bloc-notes", false);
+    add_app_entry(L"Calculatrice", L"calc.exe", L"Utilitaire", false);
+    add_app_entry(L"Command Prompt", L"cmd.exe", L"Invite de commandes", false);
+    add_app_entry(L"PowerShell", L"powershell.exe", L"Terminal PowerShell", false);
+    add_app_entry(L"VS Code", L"code", L"Editeur de code", false);
+    add_app_entry(L"Explorer", L"explorer.exe", L"Gestionnaire de fichiers", false);
+    add_app_entry(L"Gestionnaire des t\u00e2ches", L"taskmgr.exe", L"Syst\u00e8me", false);
+    add_app_entry(L"Paint", L"mspaint.exe", L"Graphisme", false);
 }
 
 static void filter_apps(const wchar_t *query)
@@ -262,33 +495,38 @@ static void filter_apps(const wchar_t *query)
         const wchar_t *name = s_apps[i].name;
         size_t nlen = wcslen(name);
 
-        if (wcs_starts_with_ci(name, query)) {
-            score = 1000 - (int)(nlen - qlen);
-        } else {
-            // Check if any word starts with query
-            const wchar_t *p = name;
-            while (*p != L'\0') {
-                while (*p == L' ' || *p == L'-' || *p == L'_') {
-                    p++;
-                }
-                if (wcs_starts_with_ci(p, query)) {
-                    score = 800 - (int)(nlen - qlen);
-                    break;
-                }
-                while (*p != L'\0' && *p != L' ' && *p != L'-' && *p != L'_') {
-                    p++;
-                }
+        // Check if query is targeting themes (e.g. "th", "theme", "dark", "light", etc.)
+        if (s_apps[i].is_action) {
+            if (wcs_contains_ci(name, query) || wcs_contains_ci(s_apps[i].desc, query)) {
+                score = 900 - (int)(nlen - qlen);
             }
+        } else {
+            if (wcs_starts_with_ci(name, query)) {
+                score = 1000 - (int)(nlen - qlen);
+            } else {
+                const wchar_t *p = name;
+                while (*p != L'\0') {
+                    while (*p == L' ' || *p == L'-' || *p == L'_') {
+                        p++;
+                    }
+                    if (wcs_starts_with_ci(p, query)) {
+                        score = 800 - (int)(nlen - qlen);
+                        break;
+                    }
+                    while (*p != L'\0' && *p != L' ' && *p != L'-' && *p != L'_') {
+                        p++;
+                    }
+                }
 
-            if (score == 0 && wcs_contains_ci(name, query)) {
-                score = 500 - (int)(nlen - qlen);
-            } else if (score == 0 && wcs_contains_ci(s_apps[i].target, query)) {
-                score = 300;
+                if (score == 0 && wcs_contains_ci(name, query)) {
+                    score = 500 - (int)(nlen - qlen);
+                } else if (score == 0 && wcs_contains_ci(s_apps[i].target, query)) {
+                    score = 300;
+                }
             }
         }
 
         if (score > 0) {
-            // Insert into top matches sorted by score
             int insert_pos = -1;
             for (int j = 0; j < s_match_count; j++) {
                 if (score > s_matches[j].score) {
@@ -356,6 +594,14 @@ static void execute_command(const wchar_t *input)
     }
 
     if (*input == L'\0') {
+        return;
+    }
+
+    // Check if this is an internal theme switch action
+    if (wcsncmp(input, L"__theme:", 8) == 0) {
+        int theme_id = _wtoi(input + 8);
+        config_set_theme((ThemeType)theme_id);
+        launcher_apply_theme();
         return;
     }
 
@@ -541,7 +787,7 @@ static LRESULT CALLBACK launcher_wnd_proc(HWND hwnd, UINT uMsg, WPARAM wParam, L
         int w = client_rect.right - client_rect.left;
         int h = client_rect.bottom - client_rect.top;
 
-        // Double buffer to eliminate flicker
+        // Double buffer for 100% flicker-free rendering
         HDC mem_dc = CreateCompatibleDC(hdc);
         HBITMAP mem_bmp = CreateCompatibleBitmap(hdc, w, h);
         HGDIOBJ old_bmp = SelectObject(mem_dc, mem_bmp);
@@ -549,70 +795,84 @@ static LRESULT CALLBACK launcher_wnd_proc(HWND hwnd, UINT uMsg, WPARAM wParam, L
         // Fill background
         FillRect(mem_dc, &client_rect, s_bg_brush);
 
-        // Draw border
+        // Draw soft outer border
         HGDIOBJ old_pen = SelectObject(mem_dc, s_border_pen);
         HGDIOBJ old_brush = SelectObject(mem_dc, GetStockObject(HOLLOW_BRUSH));
-        Rectangle(mem_dc, 0, 0, w, h);
-        Rectangle(mem_dc, 1, 1, w - 1, h - 1);
+        RoundRect(mem_dc, 0, 0, w, h, 16, 16);
         SelectObject(mem_dc, old_brush);
         SelectObject(mem_dc, old_pen);
 
-        // Draw terminal prompt ">"
+        // Draw prompt icon
         SetBkMode(mem_dc, TRANSPARENT);
-        SetTextColor(mem_dc, COLOR_ACCENT);
+        SetTextColor(mem_dc, s_current_theme.accent_color);
         HGDIOBJ old_font = SelectObject(mem_dc, s_font);
-        TextOutW(mem_dc, 16, 14, L">", 1);
+        TextOutW(mem_dc, 18, 16, s_current_theme.prompt_symbol, (int)wcslen(s_current_theme.prompt_symbol));
 
-        // Draw prediction suggestions list if present
+        // Draw suggestion dropdown items if active
         if (s_match_count > 0) {
-            // Horizontal separator
-            HPEN sep_pen = CreatePen(PS_SOLID, 1, RGB(42, 47, 58));
+            // Subtle separator line
+            HPEN sep_pen = CreatePen(PS_SOLID, 1, s_current_theme.sep_color);
             HGDIOBJ prev_pen = SelectObject(mem_dc, sep_pen);
-            MoveToEx(mem_dc, 12, BASE_HEIGHT - 2, NULL);
-            LineTo(mem_dc, w - 12, BASE_HEIGHT - 2);
+            MoveToEx(mem_dc, 16, BASE_HEIGHT - 2, NULL);
+            LineTo(mem_dc, w - 16, BASE_HEIGHT - 2);
             SelectObject(mem_dc, prev_pen);
             DeleteObject(sep_pen);
 
             for (int i = 0; i < s_match_count; i++) {
                 int item_top = BASE_HEIGHT + 4 + i * ITEM_HEIGHT;
-                int item_bottom = item_top + ITEM_HEIGHT;
-                RECT item_rect = { 10, item_top, w - 10, item_bottom };
+                int item_bottom = item_top + ITEM_HEIGHT - 2;
 
                 int app_idx = s_matches[i].app_index;
                 const wchar_t *name = s_apps[app_idx].name;
+                const wchar_t *desc = s_apps[app_idx].desc;
 
                 if (i == s_selected_index) {
-                    // Selected item background
-                    HBRUSH sel_brush = CreateSolidBrush(RGB(28, 44, 36));
-                    FillRect(mem_dc, &item_rect, sel_brush);
-                    DeleteObject(sel_brush);
+                    // Modern rounded selection card/pill
+                    HGDIOBJ prev_card_brush = SelectObject(mem_dc, s_card_brush);
+                    HGDIOBJ null_pen = SelectObject(mem_dc, GetStockObject(NULL_PEN));
+                    RoundRect(mem_dc, 10, item_top, w - 10, item_bottom, 10, 10);
 
-                    // Selected item left accent line
-                    RECT bar_rect = { 10, item_top + 4, 14, item_bottom - 4 };
+                    // Left accent indicator bar
+                    RECT bar_rect = { 12, item_top + 6, 16, item_bottom - 6 };
                     FillRect(mem_dc, &bar_rect, s_accent_brush);
 
-                    // Selected indicator
-                    SetTextColor(mem_dc, COLOR_ACCENT);
-                    TextOutW(mem_dc, 22, item_top + 8, L"\u279c", 1);
+                    SelectObject(mem_dc, null_pen);
+                    SelectObject(mem_dc, prev_card_brush);
 
-                    // Name
-                    SetTextColor(mem_dc, RGB(255, 255, 255));
-                    TextOutW(mem_dc, 46, item_top + 8, name, (int)wcslen(name));
+                    // Indicator arrow
+                    SetTextColor(mem_dc, s_current_theme.accent_color);
+                    TextOutW(mem_dc, 26, item_top + 9, L"\u279c", 1);
+
+                    // Primary name
+                    SetTextColor(mem_dc, s_current_theme.text_primary);
+                    TextOutW(mem_dc, 50, item_top + 9, name, (int)wcslen(name));
+
+                    // Secondary description on right
+                    SetTextColor(mem_dc, s_current_theme.accent_color);
+                    SIZE desc_size;
+                    GetTextExtentPoint32W(mem_dc, desc, (int)wcslen(desc), &desc_size);
+                    TextOutW(mem_dc, w - 24 - desc_size.cx, item_top + 9, desc, (int)wcslen(desc));
                 } else {
-                    // Normal item bullet
-                    SetTextColor(mem_dc, RGB(90, 100, 115));
-                    TextOutW(mem_dc, 24, item_top + 8, L"\u00b7", 1);
+                    // Unselected item bullet
+                    SetTextColor(mem_dc, s_current_theme.text_secondary);
+                    TextOutW(mem_dc, 28, item_top + 9, L"\u00b7", 1);
 
-                    // Normal item name
-                    SetTextColor(mem_dc, RGB(185, 195, 205));
-                    TextOutW(mem_dc, 46, item_top + 8, name, (int)wcslen(name));
+                    // Primary name
+                    SetTextColor(mem_dc, s_current_theme.text_primary);
+                    TextOutW(mem_dc, 50, item_top + 9, name, (int)wcslen(name));
+
+                    // Secondary description on right
+                    SetTextColor(mem_dc, s_current_theme.text_secondary);
+                    SIZE desc_size;
+                    GetTextExtentPoint32W(mem_dc, desc, (int)wcslen(desc), &desc_size);
+                    TextOutW(mem_dc, w - 24 - desc_size.cx, item_top + 9, desc, (int)wcslen(desc));
                 }
             }
         }
 
         SelectObject(mem_dc, old_font);
 
-        // Blit buffer to screen
+        // Blit buffer to window
         BitBlt(hdc, 0, 0, w, h, mem_dc, 0, 0, SRCCOPY);
 
         SelectObject(mem_dc, old_bmp);
@@ -626,8 +886,8 @@ static LRESULT CALLBACK launcher_wnd_proc(HWND hwnd, UINT uMsg, WPARAM wParam, L
     case WM_CTLCOLOREDIT:
     case WM_CTLCOLORSTATIC: {
         HDC hdc = (HDC)wParam;
-        SetTextColor(hdc, COLOR_TEXT);
-        SetBkColor(hdc, COLOR_BG);
+        SetTextColor(hdc, s_current_theme.text_primary);
+        SetBkColor(hdc, s_current_theme.bg_color);
         return (LRESULT)s_bg_brush;
     }
 
@@ -651,34 +911,12 @@ bool launcher_init(HINSTANCE hInstance)
         hInstance = GetModuleHandleW(NULL);
     }
 
-    s_bg_brush = CreateSolidBrush(COLOR_BG);
-    s_accent_brush = CreateSolidBrush(COLOR_ACCENT);
-    s_border_pen = CreatePen(PS_SOLID, 1, COLOR_ACCENT);
-
-    s_font = CreateFontW(
-        22,                        // cHeight
-        0,                         // cWidth
-        0,                         // cEscapement
-        0,                         // cOrientation
-        FW_SEMIBOLD,               // cWeight
-        FALSE,                     // bItalic
-        FALSE,                     // bUnderline
-        FALSE,                     // bStrikeOut
-        DEFAULT_CHARSET,           // iCharSet
-        OUT_OUTLINE_PRECIS,        // iOutPrecision
-        CLIP_DEFAULT_PRECIS,       // iClipPrecision
-        CLEARTYPE_QUALITY,         // iQuality
-        FIXED_PITCH | FF_MODERN,   // iPitchAndFamily
-        L"Consolas"                // pszFaceName
-    );
-
     WNDCLASSEXW wc = {0};
     wc.cbSize = sizeof(WNDCLASSEXW);
     wc.lpfnWndProc = launcher_wnd_proc;
     wc.hInstance = hInstance;
     wc.lpszClassName = LAUNCHER_CLASS_NAME;
     wc.hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
-    wc.hbrBackground = s_bg_brush;
 
     if (!RegisterClassExW(&wc)) {
         return false;
@@ -690,7 +928,7 @@ bool launcher_init(HINSTANCE hInstance)
     int pos_y = screen_h / 4;
 
     s_hwnd_launcher = CreateWindowExW(
-        WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED,
         LAUNCHER_CLASS_NAME,
         L"",
         WS_POPUP,
@@ -713,9 +951,9 @@ bool launcher_init(HINSTANCE hInstance)
         L"EDIT",
         L"",
         WS_CHILD | WS_VISIBLE | ES_LEFT | ES_AUTOHSCROLL,
-        42,
-        14,
-        LAUNCHER_WIDTH - 58,
+        48,
+        15,
+        LAUNCHER_WIDTH - 68,
         26,
         s_hwnd_launcher,
         NULL,
@@ -729,16 +967,17 @@ bool launcher_init(HINSTANCE hInstance)
         return false;
     }
 
-    SendMessageW(s_hwnd_edit, WM_SETFONT, (WPARAM)s_font, TRUE);
-
     s_old_edit_proc = (WNDPROC)SetWindowLongPtrW(
         s_hwnd_edit,
         GWLP_WNDPROC,
         (LONG_PTR)edit_subclass_proc
     );
 
-    // Index all available applications
+    // Index all applications and themes
     index_all_applications();
+
+    // Apply active theme and backdrop blur
+    launcher_apply_theme();
 
     s_is_visible = false;
     return true;
@@ -760,6 +999,11 @@ void launcher_cleanup(void)
     if (s_bg_brush != NULL) {
         DeleteObject(s_bg_brush);
         s_bg_brush = NULL;
+    }
+
+    if (s_card_brush != NULL) {
+        DeleteObject(s_card_brush);
+        s_card_brush = NULL;
     }
 
     if (s_accent_brush != NULL) {
@@ -784,6 +1028,11 @@ void launcher_show(void)
 
     s_match_count = 0;
     s_selected_index = 0;
+
+    // Refresh theme in case system dark/light mode changed
+    if (g_config.theme == THEME_SYSTEM) {
+        launcher_apply_theme();
+    }
 
     int screen_w = GetSystemMetrics(SM_CXSCREEN);
     int screen_h = GetSystemMetrics(SM_CYSCREEN);
