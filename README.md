@@ -24,6 +24,7 @@ Conçu pour une productivité maximale au clavier, il offre un design moderne tr
 
 ### 1. Recherche & Indexation instantanée
 - Détection automatique et temps réel des applications installées (Menu Démarrer utilisateur et système, registre Windows `App Paths`, commandes système courantes).
+- **Icônes natives d'applications** : extraction et affichage automatique en temps réel des véritables icônes pour chaque résultat (exécutables, raccourcis `.lnk`, dossiers, liens web et actions système).
 - Saisie et ouverture directe d'adresses web (`http://`, `https://`, domaines `.com`, `.fr`...) ou de fichiers et dossiers locaux.
 
 ### 2. Système d'Alias Intelligent & Suggestions de Cibles

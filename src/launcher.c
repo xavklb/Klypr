@@ -61,6 +61,7 @@ typedef struct {
     wchar_t target[ALIAS_TARGET_LEN];
     wchar_t desc[128];
     bool is_action;
+    HICON hicon;
 } AppEntry;
 
 typedef struct {
@@ -351,6 +352,158 @@ static bool wcs_ends_with_ci(const wchar_t *str, const wchar_t *suffix)
     return true;
 }
 
+static HICON resolve_icon(const wchar_t *raw_target, bool is_action)
+{
+    if (raw_target == NULL || raw_target[0] == L'\0') {
+        return NULL;
+    }
+
+    while (*raw_target == L' ' || *raw_target == L'\t') {
+        raw_target++;
+    }
+
+    // 1. Internal actions
+    if (is_action) {
+        if (wcsncmp(raw_target, L"__theme:", 8) == 0) {
+            HICON h = NULL;
+            if (ExtractIconExW(L"shell32.dll", 33, NULL, &h, 1) > 0 && h != NULL) {
+                return h;
+            }
+        } else if (wcsncmp(raw_target, L"__autostart:", 12) == 0) {
+            HICON h = NULL;
+            if (ExtractIconExW(L"shell32.dll", 238, NULL, &h, 1) > 0 && h != NULL) {
+                return h;
+            }
+        } else if (wcsncmp(raw_target, L"__config:", 9) == 0) {
+            HICON h = NULL;
+            if (ExtractIconExW(L"shell32.dll", 21, NULL, &h, 1) > 0 && h != NULL) {
+                return h;
+            }
+        } else if (wcsncmp(raw_target, L"__alias_add:", 12) == 0) {
+            const wchar_t *payload = raw_target + 12;
+            const wchar_t *sep = wcschr(payload, L':');
+            if (sep != NULL) {
+                return resolve_icon(sep + 1, false);
+            }
+        } else if (wcsncmp(raw_target, L"__alias_del:", 12) == 0) {
+            HICON h = NULL;
+            if (ExtractIconExW(L"shell32.dll", 131, NULL, &h, 1) > 0 && h != NULL) {
+                return h;
+            }
+        }
+    }
+
+    // 2. Web URLs
+    if (wcs_starts_with_ci(raw_target, L"http://") || wcs_starts_with_ci(raw_target, L"https://") || wcs_starts_with_ci(raw_target, L"www.")) {
+        HICON h = NULL;
+        if (ExtractIconExW(L"shell32.dll", 13, NULL, &h, 1) > 0 && h != NULL) {
+            return h;
+        }
+    }
+
+    // Extract target path (strip quotes if any)
+    wchar_t target[MAX_PATH];
+    if (raw_target[0] == L'"') {
+        const wchar_t *end_q = wcschr(raw_target + 1, L'"');
+        if (end_q != NULL) {
+            size_t len = (size_t)(end_q - (raw_target + 1));
+            if (len >= MAX_PATH) len = MAX_PATH - 1;
+            wcsncpy(target, raw_target + 1, len);
+            target[len] = L'\0';
+        } else {
+            wcsncpy(target, raw_target + 1, MAX_PATH - 1);
+            target[MAX_PATH - 1] = L'\0';
+        }
+    } else {
+        wcsncpy(target, raw_target, MAX_PATH - 1);
+        target[MAX_PATH - 1] = L'\0';
+    }
+
+    // 3. Local Directory / Folder
+    DWORD attrs = GetFileAttributesW(target);
+    if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY)) {
+        HICON h = NULL;
+        if (ExtractIconExW(L"shell32.dll", 3, NULL, &h, 1) > 0 && h != NULL) {
+            return h;
+        }
+    }
+
+    // 4. Exact path or .lnk file on disk
+    SHFILEINFOW sfi = {0};
+    if (SHGetFileInfoW(target, 0, &sfi, sizeof(sfi), SHGFI_ICON | SHGFI_SMALLICON) && sfi.hIcon != NULL) {
+        return sfi.hIcon;
+    }
+
+    // If target has arguments (e.g. "explorer.exe C:\..."), try first word
+    wchar_t first_cmd[MAX_PATH];
+    wcsncpy(first_cmd, target, MAX_PATH - 1);
+    first_cmd[MAX_PATH - 1] = L'\0';
+    wchar_t *sp = wcschr(first_cmd, L' ');
+    if (sp != NULL) {
+        *sp = L'\0';
+        if (SHGetFileInfoW(first_cmd, 0, &sfi, sizeof(sfi), SHGFI_ICON | SHGFI_SMALLICON) && sfi.hIcon != NULL) {
+            return sfi.hIcon;
+        }
+    }
+
+    const wchar_t *cmd_to_lookup = (sp != NULL) ? first_cmd : target;
+
+    // 5. App name or executable without path (via SearchPathW)
+    wchar_t resolved[MAX_PATH];
+    if (SearchPathW(NULL, cmd_to_lookup, L".exe", MAX_PATH, resolved, NULL) > 0) {
+        memset(&sfi, 0, sizeof(sfi));
+        if (SHGetFileInfoW(resolved, 0, &sfi, sizeof(sfi), SHGFI_ICON | SHGFI_SMALLICON) && sfi.hIcon != NULL) {
+            return sfi.hIcon;
+        }
+    }
+
+    // 6. Check App Paths in registry (HKLM & HKCU)
+    wchar_t exe_name[MAX_PATH];
+    if (wcsstr(cmd_to_lookup, L".") == NULL) {
+        _snwprintf(exe_name, MAX_PATH, L"%s.exe", cmd_to_lookup);
+    } else {
+        wcsncpy(exe_name, cmd_to_lookup, MAX_PATH - 1);
+        exe_name[MAX_PATH - 1] = L'\0';
+    }
+
+    wchar_t app_path_key[MAX_PATH];
+    _snwprintf(app_path_key, MAX_PATH, L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\%s", exe_name);
+    HKEY hKey;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, app_path_key, 0, KEY_READ, &hKey) == ERROR_SUCCESS ||
+        RegOpenKeyExW(HKEY_CURRENT_USER, app_path_key, 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+        wchar_t reg_path[MAX_PATH] = {0};
+        DWORD rsize = sizeof(reg_path);
+        if (RegQueryValueExW(hKey, NULL, NULL, NULL, (LPBYTE)reg_path, &rsize) == ERROR_SUCCESS && reg_path[0] != L'\0') {
+            wchar_t *p = reg_path;
+            if (*p == L'"') {
+                p++;
+                wchar_t *end = wcsrchr(p, L'"');
+                if (end) *end = L'\0';
+            }
+            memset(&sfi, 0, sizeof(sfi));
+            if (SHGetFileInfoW(p, 0, &sfi, sizeof(sfi), SHGFI_ICON | SHGFI_SMALLICON) && sfi.hIcon != NULL) {
+                RegCloseKey(hKey);
+                return sfi.hIcon;
+            }
+        }
+        RegCloseKey(hKey);
+    }
+
+    // 7. General extension fallback (SHGFI_USEFILEATTRIBUTES)
+    memset(&sfi, 0, sizeof(sfi));
+    if (SHGetFileInfoW(cmd_to_lookup, FILE_ATTRIBUTE_NORMAL, &sfi, sizeof(sfi), SHGFI_ICON | SHGFI_SMALLICON | SHGFI_USEFILEATTRIBUTES) && sfi.hIcon != NULL) {
+        return sfi.hIcon;
+    }
+
+    // 8. Default generic application icon
+    HICON default_icon = LoadIconW(NULL, (LPCWSTR)IDI_APPLICATION);
+    if (default_icon != NULL) {
+        return CopyIcon(default_icon);
+    }
+
+    return NULL;
+}
+
 static void add_app_entry(const wchar_t *name, const wchar_t *target, const wchar_t *desc, bool is_action)
 {
     if (name == NULL || target == NULL || name[0] == L'\0' || s_app_count >= MAX_INDEXED_APPS) {
@@ -382,6 +535,7 @@ static void add_app_entry(const wchar_t *name, const wchar_t *target, const wcha
     wcsncpy(s_apps[s_app_count].desc, desc ? desc : L"Application", 127);
     s_apps[s_app_count].desc[127] = L'\0';
     s_apps[s_app_count].is_action = is_action;
+    s_apps[s_app_count].hicon = resolve_icon(target, is_action);
     s_app_count++;
 }
 
@@ -472,6 +626,12 @@ static void scan_app_paths_registry(void)
 
 static void index_all_applications(void)
 {
+    for (int i = 0; i < s_app_count; i++) {
+        if (s_apps[i].hicon != NULL) {
+            DestroyIcon(s_apps[i].hicon);
+            s_apps[i].hicon = NULL;
+        }
+    }
     s_app_count = 0;
 
     // 1. Add Theme and Configuration Actions
@@ -708,6 +868,7 @@ static void add_dynamic_match(const wchar_t *name, const wchar_t *target, const 
         wcsncpy(s_dynamic_entries[dyn_idx].desc, desc ? desc : L"", 127);
         s_dynamic_entries[dyn_idx].desc[127] = L'\0';
         s_dynamic_entries[dyn_idx].is_action = true;
+        s_dynamic_entries[dyn_idx].hicon = resolve_icon(target, true);
 
         int limit = s_match_count < MAX_MATCHES ? s_match_count : (MAX_MATCHES - 1);
         for (int k = limit; k > insert_pos; k--) {
@@ -921,6 +1082,12 @@ static void filter_apps(const wchar_t *query)
 {
     s_match_count = 0;
     s_selected_index = 0;
+    for (int i = 0; i < s_dyn_count; i++) {
+        if (s_dynamic_entries[i].hicon != NULL) {
+            DestroyIcon(s_dynamic_entries[i].hicon);
+            s_dynamic_entries[i].hicon = NULL;
+        }
+    }
     s_dyn_count = 0;
 
     if (query == NULL) {
@@ -1605,6 +1772,16 @@ static LRESULT CALLBACK launcher_wnd_proc(HWND hwnd, UINT uMsg, WPARAM wParam, L
                 const AppEntry *entry = get_entry_for_match(i);
                 const wchar_t *name = entry ? entry->name : L"";
                 const wchar_t *desc = entry ? entry->desc : L"";
+                HICON hicon = entry ? entry->hicon : NULL;
+
+                SIZE desc_size;
+                GetTextExtentPoint32W(mem_dc, desc, (int)wcslen(desc), &desc_size);
+
+                int text_left = 74;
+                int text_right = w - 30 - desc_size.cx;
+                if (text_right < 200) {
+                    text_right = 200;
+                }
 
                 if (i == s_selected_index) {
                     // Modern rounded selection card/pill
@@ -1621,30 +1798,38 @@ static LRESULT CALLBACK launcher_wnd_proc(HWND hwnd, UINT uMsg, WPARAM wParam, L
 
                     // Indicator arrow
                     SetTextColor(mem_dc, s_current_theme.accent_color);
-                    TextOutW(mem_dc, 26, item_top + 9, L"\u279c", 1);
+                    TextOutW(mem_dc, 24, item_top + 9, L"\u279c", 1);
 
-                    // Primary name
+                    // Draw application icon
+                    if (hicon != NULL) {
+                        DrawIconEx(mem_dc, 44, item_top + 9, hicon, 20, 20, 0, NULL, DI_NORMAL);
+                    }
+
+                    // Primary name with auto ellipsis
                     SetTextColor(mem_dc, s_current_theme.text_primary);
-                    TextOutW(mem_dc, 50, item_top + 9, name, (int)wcslen(name));
+                    RECT name_rect = { text_left, item_top + 9, text_right, item_bottom };
+                    DrawTextW(mem_dc, (LPWSTR)name, -1, &name_rect, DT_LEFT | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
 
                     // Secondary description on right
                     SetTextColor(mem_dc, s_current_theme.accent_color);
-                    SIZE desc_size;
-                    GetTextExtentPoint32W(mem_dc, desc, (int)wcslen(desc), &desc_size);
                     TextOutW(mem_dc, w - 24 - desc_size.cx, item_top + 9, desc, (int)wcslen(desc));
                 } else {
                     // Unselected item bullet
                     SetTextColor(mem_dc, s_current_theme.text_secondary);
-                    TextOutW(mem_dc, 28, item_top + 9, L"\u00b7", 1);
+                    TextOutW(mem_dc, 26, item_top + 9, L"\u00b7", 1);
 
-                    // Primary name
+                    // Draw application icon
+                    if (hicon != NULL) {
+                        DrawIconEx(mem_dc, 44, item_top + 9, hicon, 20, 20, 0, NULL, DI_NORMAL);
+                    }
+
+                    // Primary name with auto ellipsis
                     SetTextColor(mem_dc, s_current_theme.text_primary);
-                    TextOutW(mem_dc, 50, item_top + 9, name, (int)wcslen(name));
+                    RECT name_rect = { text_left, item_top + 9, text_right, item_bottom };
+                    DrawTextW(mem_dc, (LPWSTR)name, -1, &name_rect, DT_LEFT | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
 
                     // Secondary description on right
                     SetTextColor(mem_dc, s_current_theme.text_secondary);
-                    SIZE desc_size;
-                    GetTextExtentPoint32W(mem_dc, desc, (int)wcslen(desc), &desc_size);
                     TextOutW(mem_dc, w - 24 - desc_size.cx, item_top + 9, desc, (int)wcslen(desc));
                 }
             }
@@ -1776,6 +1961,19 @@ bool launcher_init(HINSTANCE hInstance)
 
 void launcher_cleanup(void)
 {
+    for (int i = 0; i < s_app_count; i++) {
+        if (s_apps[i].hicon != NULL) {
+            DestroyIcon(s_apps[i].hicon);
+            s_apps[i].hicon = NULL;
+        }
+    }
+    for (int i = 0; i < s_dyn_count; i++) {
+        if (s_dynamic_entries[i].hicon != NULL) {
+            DestroyIcon(s_dynamic_entries[i].hicon);
+            s_dynamic_entries[i].hicon = NULL;
+        }
+    }
+
     if (s_hwnd_launcher != NULL) {
         DestroyWindow(s_hwnd_launcher);
         s_hwnd_launcher = NULL;
