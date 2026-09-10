@@ -98,6 +98,7 @@ static int s_app_count = 0;
 static MatchEntry s_matches[MAX_MATCHES];
 static int s_match_count = 0;
 static int s_selected_index = 0;
+static AppEntry s_url_entry;
 
 static const struct {
     const wchar_t *name;
@@ -471,6 +472,103 @@ static void index_all_applications(void)
     add_app_entry(L"Paint", L"mspaint.exe", L"Graphisme", false);
 }
 
+static bool is_likely_url(const wchar_t *str, wchar_t *out_url, size_t out_url_size)
+{
+    if (str == NULL || out_url == NULL || out_url_size < 10) {
+        return false;
+    }
+
+    while (*str == L' ' || *str == L'\t') {
+        str++;
+    }
+
+    if (*str == L'\0') {
+        return false;
+    }
+
+    // A URL cannot contain spaces
+    if (wcschr(str, L' ') != NULL || wcschr(str, L'\t') != NULL) {
+        return false;
+    }
+
+    // 1. Explicit http:// or https://
+    if (wcs_starts_with_ci(str, L"http://") || wcs_starts_with_ci(str, L"https://")) {
+        wcsncpy(out_url, str, out_url_size - 1);
+        out_url[out_url_size - 1] = L'\0';
+        return true;
+    }
+
+    // 2. Starts with www.
+    if (wcs_starts_with_ci(str, L"www.")) {
+        _snwprintf(out_url, out_url_size, L"https://%s", str);
+        return true;
+    }
+
+    // 3. Starts with localhost
+    if (wcs_starts_with_ci(str, L"localhost:") || _wcsicmp(str, L"localhost") == 0 || wcs_starts_with_ci(str, L"localhost/")) {
+        _snwprintf(out_url, out_url_size, L"http://%s", str);
+        return true;
+    }
+
+    // 4. Domain / IP detection
+    const wchar_t *first_slash = wcschr(str, L'/');
+    const wchar_t *first_colon = wcschr(str, L':');
+    const wchar_t *first_delim = first_slash;
+    if (first_colon != NULL && (first_delim == NULL || first_colon < first_delim)) {
+        first_delim = first_colon;
+    }
+
+    wchar_t host[128];
+    size_t host_len = first_delim ? (size_t)(first_delim - str) : wcslen(str);
+    if (host_len == 0 || host_len >= 128) {
+        return false;
+    }
+    wcsncpy(host, str, host_len);
+    host[host_len] = L'\0';
+
+    const wchar_t *last_dot = wcsrchr(host, L'.');
+    if (last_dot == NULL || last_dot == host || *(last_dot + 1) == L'\0') {
+        return false;
+    }
+
+    const wchar_t *tld = last_dot + 1;
+    size_t tld_len = wcslen(tld);
+    if (tld_len < 2 || tld_len > 12) {
+        return false;
+    }
+
+    bool all_digits = true;
+    for (size_t i = 0; i < tld_len; i++) {
+        if (!iswdigit(tld[i])) {
+            all_digits = false;
+        }
+        if (!iswalpha(tld[i]) && !iswdigit(tld[i])) {
+            return false;
+        }
+    }
+
+    if (!all_digits) {
+        static const wchar_t *non_web_exts[] = {
+            L"exe", L"bat", L"cmd", L"lnk", L"dll", L"sys", L"msi",
+            L"txt", L"doc", L"docx", L"pdf", L"zip", L"tar", L"gz", L"7z", L"rar",
+            L"c", L"h", L"cpp", L"hpp", L"py", L"json", L"xml", L"ini", L"cfg", L"log",
+            L"png", L"jpg", L"jpeg", L"gif", L"ico", L"mp3", L"mp4", L"mkv"
+        };
+        for (size_t i = 0; i < sizeof(non_web_exts) / sizeof(non_web_exts[0]); i++) {
+            if (_wcsicmp(tld, non_web_exts[i]) == 0) {
+                return false;
+            }
+        }
+    }
+
+    if (all_digits) {
+        _snwprintf(out_url, out_url_size, L"http://%s", str);
+    } else {
+        _snwprintf(out_url, out_url_size, L"https://%s", str);
+    }
+    return true;
+}
+
 static void filter_apps(const wchar_t *query)
 {
     s_match_count = 0;
@@ -552,6 +650,24 @@ static void filter_apps(const wchar_t *query)
             }
         }
     }
+
+    if (s_match_count == 0) {
+        wchar_t normalized_url[MAX_PATH];
+        if (is_likely_url(query, normalized_url, MAX_PATH)) {
+            wcsncpy(s_url_entry.name, normalized_url, 127);
+            s_url_entry.name[127] = L'\0';
+            wcsncpy(s_url_entry.target, normalized_url, MAX_PATH - 1);
+            s_url_entry.target[MAX_PATH - 1] = L'\0';
+            wcsncpy(s_url_entry.desc, L"Navigateur Web", 63);
+            s_url_entry.desc[63] = L'\0';
+            s_url_entry.is_action = true;
+
+            s_matches[0].app_index = -1;
+            s_matches[0].score = 1000;
+            s_match_count = 1;
+            s_selected_index = 0;
+        }
+    }
 }
 
 static void update_launcher_height(void)
@@ -602,6 +718,13 @@ static void execute_command(const wchar_t *input)
         int theme_id = _wtoi(input + 8);
         config_set_theme((ThemeType)theme_id);
         launcher_apply_theme();
+        return;
+    }
+
+    // Direct check if input is a web URL/link
+    wchar_t normalized_url[MAX_PATH];
+    if (is_likely_url(input, normalized_url, MAX_PATH)) {
+        ShellExecuteW(NULL, L"open", normalized_url, NULL, NULL, SW_SHOWNORMAL);
         return;
     }
 
@@ -701,8 +824,9 @@ static LRESULT CALLBACK edit_subclass_proc(HWND hwnd, UINT uMsg, WPARAM wParam, 
         if (wParam == VK_TAB) {
             if (s_match_count > 0 && s_selected_index >= 0 && s_selected_index < s_match_count) {
                 int app_idx = s_matches[s_selected_index].app_index;
-                SetWindowTextW(hwnd, s_apps[app_idx].name);
-                int len = (int)wcslen(s_apps[app_idx].name);
+                const wchar_t *name = (app_idx == -1) ? s_url_entry.name : s_apps[app_idx].name;
+                SetWindowTextW(hwnd, name);
+                int len = (int)wcslen(name);
                 SendMessageW(hwnd, EM_SETSEL, len, len);
             }
             return 0;
@@ -712,7 +836,8 @@ static LRESULT CALLBACK edit_subclass_proc(HWND hwnd, UINT uMsg, WPARAM wParam, 
             wchar_t target_to_exec[MAX_PATH] = {0};
             if (s_match_count > 0 && s_selected_index >= 0 && s_selected_index < s_match_count) {
                 int app_idx = s_matches[s_selected_index].app_index;
-                wcsncpy(target_to_exec, s_apps[app_idx].target, MAX_PATH - 1);
+                const wchar_t *target = (app_idx == -1) ? s_url_entry.target : s_apps[app_idx].target;
+                wcsncpy(target_to_exec, target, MAX_PATH - 1);
             } else {
                 GetWindowTextW(hwnd, target_to_exec, MAX_PATH - 1);
             }
@@ -767,9 +892,7 @@ static LRESULT CALLBACK launcher_wnd_proc(HWND hwnd, UINT uMsg, WPARAM wParam, L
             int clicked = (y - BASE_HEIGHT - 4) / ITEM_HEIGHT;
             if (clicked >= 0 && clicked < s_match_count) {
                 int app_idx = s_matches[clicked].app_index;
-                wchar_t target[MAX_PATH];
-                wcsncpy(target, s_apps[app_idx].target, MAX_PATH - 1);
-                target[MAX_PATH - 1] = L'\0';
+                const wchar_t *target = (app_idx == -1) ? s_url_entry.target : s_apps[app_idx].target;
                 launcher_hide();
                 execute_command(target);
                 return 0;
@@ -823,8 +946,8 @@ static LRESULT CALLBACK launcher_wnd_proc(HWND hwnd, UINT uMsg, WPARAM wParam, L
                 int item_bottom = item_top + ITEM_HEIGHT - 2;
 
                 int app_idx = s_matches[i].app_index;
-                const wchar_t *name = s_apps[app_idx].name;
-                const wchar_t *desc = s_apps[app_idx].desc;
+                const wchar_t *name = (app_idx == -1) ? s_url_entry.name : s_apps[app_idx].name;
+                const wchar_t *desc = (app_idx == -1) ? s_url_entry.desc : s_apps[app_idx].desc;
 
                 if (i == s_selected_index) {
                     // Modern rounded selection card/pill
