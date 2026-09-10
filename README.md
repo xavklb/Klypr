@@ -12,6 +12,7 @@ Il organise automatiquement vos fenêtres sous la forme d'un arbre binaire (*Bin
 - **Filtrage intelligent** : prise en charge exclusive des fenêtres applicatives gérables (exclusion des barres d'outils, infobulles, fenêtres masquées ou sans titre).
 - **Contrôle au clavier** : interception globale via des hooks Windows de bas niveau.
 - **Raccourcis par défaut** :
+  - `Ctrl` + `A` : Afficher / masquer le sélecteur d'application rapide style terminal.
   - `Alt` + `Entrée` : Lancer le terminal Windows (`wt.exe`).
   - `Alt` + `Shift` + `Q` : Quitter Klypr proprement.
 
@@ -29,6 +30,7 @@ Il organise automatiquement vos fenêtres sous la forme d'un arbre binaire (*Bin
 │   ├── config.h       # Configuration générale (espacements, bordures)
 │   ├── event.h        # Hooks WinEvent (détection des ouvertures/fermetures)
 │   ├── input.h        # Hooks clavier bas niveau WH_KEYBOARD_LL
+│   ├── launcher.h     # Sélecteur d'application style terminal
 │   ├── layout.h       # Définition de l'arbre BSP et agencement
 │   └── window.h       # Filtrage et détection des fenêtres gérables
 ├── src/
@@ -36,6 +38,7 @@ Il organise automatiquement vos fenêtres sous la forme d'un arbre binaire (*Bin
 │   ├── config.c
 │   ├── event.c
 │   ├── input.c
+│   ├── launcher.c
 │   ├── layout.c
 │   ├── main.c         # Point d'entrée WinMain
 │   └── window.c
