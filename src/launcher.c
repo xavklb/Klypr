@@ -1,6 +1,7 @@
 #include "launcher.h"
 #include "config.h"
 #include "input.h"
+#include "calc.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -512,6 +513,14 @@ static HICON resolve_icon(const wchar_t *raw_target, bool is_action)
             }
             HICON h = NULL;
             if (ExtractIconExW(L"shell32.dll", icon_idx, NULL, &h, 1) > 0 && h != NULL) {
+                return h;
+            }
+        } else if (wcsncmp(raw_target, L"__calc:", 7) == 0) {
+            HICON h = resolve_icon(L"calc.exe", false);
+            if (h != NULL) {
+                return h;
+            }
+            if (ExtractIconExW(L"shell32.dll", 24, NULL, &h, 1) > 0 && h != NULL) {
                 return h;
             }
         }
@@ -1437,7 +1446,27 @@ static void filter_apps(const wchar_t *query)
         }
     }
 
-    // 3. Normal search in indexed apps, actions and aliases
+    // 3. Instant Calculator evaluation
+    double calc_val = 0;
+    wchar_t calc_res[64];
+    if (calc_evaluate(query, &calc_val, calc_res, sizeof(calc_res) / sizeof(calc_res[0]))) {
+        wchar_t calc_title[128];
+        _snwprintf(calc_title, sizeof(calc_title) / sizeof(calc_title[0]), L"= %s", calc_res);
+
+        wchar_t calc_target[128];
+        _snwprintf(calc_target, sizeof(calc_target) / sizeof(calc_target[0]), L"__calc:%s", calc_res);
+
+        wchar_t calc_desc[128];
+        _snwprintf(calc_desc, sizeof(calc_desc) / sizeof(calc_desc[0]), L"Calculatrice \u2022 Entr\u00e9e: copier, Tab: r\u00e9utiliser");
+
+        add_dynamic_match(calc_title, calc_target, calc_desc, 4500);
+
+        if (query[0] == L'=') {
+            return;
+        }
+    }
+
+    // 4. Normal search in indexed apps, actions and aliases
     size_t qlen = wcslen(query);
     const wchar_t *app_q = (query[0] == L':' && query[1] != L'\0') ? (query + 1) : query;
     size_t app_qlen = wcslen(app_q);
@@ -1749,6 +1778,23 @@ static void execute_command(const wchar_t *input)
         return;
     }
 
+    // Check if this is a calculator copy action: __calc:<result>
+    if (wcsncmp(input, L"__calc:", 7) == 0) {
+        const wchar_t *res = input + 7;
+        calc_copy_to_clipboard(res);
+        return;
+    }
+
+    // Check if input is an explicit calculation (= ...)
+    if (input[0] == L'=') {
+        double c_val = 0;
+        wchar_t c_res[64];
+        if (calc_evaluate(input, &c_val, c_res, sizeof(c_res) / sizeof(c_res[0]))) {
+            calc_copy_to_clipboard(c_res);
+            return;
+        }
+    }
+
     // Direct check if input is an existing file or directory path (supports unquoted paths with spaces)
     if (GetFileAttributesW(input) != INVALID_FILE_ATTRIBUTES) {
         ShellExecuteW(NULL, L"open", input, NULL, NULL, SW_SHOWNORMAL);
@@ -1907,6 +1953,14 @@ static LRESULT CALLBACK edit_subclass_proc(HWND hwnd, UINT uMsg, WPARAM wParam, 
                     } else if (wcsncmp(entry->target, L"__sys:", 6) == 0) {
                         wchar_t tab_buf[32];
                         _snwprintf(tab_buf, sizeof(tab_buf)/sizeof(tab_buf[0]), L":%s", entry->target + 6);
+                        SetWindowTextW(hwnd, tab_buf);
+                        int len = (int)wcslen(tab_buf);
+                        SendMessageW(hwnd, EM_SETSEL, len, len);
+                        return 0;
+                    } else if (wcsncmp(entry->target, L"__calc:", 7) == 0) {
+                        const wchar_t *res = entry->target + 7;
+                        wchar_t tab_buf[128];
+                        _snwprintf(tab_buf, sizeof(tab_buf)/sizeof(tab_buf[0]), L"%s ", res);
                         SetWindowTextW(hwnd, tab_buf);
                         int len = (int)wcslen(tab_buf);
                         SendMessageW(hwnd, EM_SETSEL, len, len);

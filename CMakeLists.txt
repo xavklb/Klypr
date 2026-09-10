@@ -10,6 +10,7 @@ set(SOURCES
     src/config.c
     src/input.c
     src/launcher.c
+    src/calc.c
 )
 
 add_executable(klypr WIN32 ${SOURCES})

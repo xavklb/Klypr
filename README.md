@@ -59,13 +59,24 @@ Contrôlez rapidement votre PC et votre session Windows directement depuis la ba
 - **Complétion `Tab`** : tapez un début de commande (ex: `:l`, `:sl`) puis appuyez sur `Tab` pour compléter automatiquement.
 - **Icônes système dédiées** : chaque action affiche l'icône système Windows correspondante (cadenas, alimentation, corbeille, redémarrage...).
 
-### 4. Lancement Rapide du Terminal
+### 4. Calculatrice Instantanée
+Effectuez des calculs mathématiques en temps réel directement dans la barre de recherche sans ouvrir d'application tierce :
+- **Opérations arithmétiques** : `12 * 45`, `12 x 45`, `100 / 4`, `(10 + 5) * 2`, `2^10`, `2 ** 8`, `10 % 3`, `10 mod 3`.
+- **Nombres décimaux** : support natif du point et de la virgule décimale (`12.5 + 3.2` ou `12,5 + 3,2`).
+- **Pourcentages intelligents** : `20% of 150` (30), `100 + 20%` (120), `100 - 20%` (80), `50 * 10%` (5).
+- **Fonctions & constantes** : `sqrt(144)`, `abs(-42)`, `round(3.7)`, `floor(3.7)`, `ceil(3.2)`, `pow(2, 5)`, `sin(0)`, `cos(0)`, `log10(1000)`, `ln(e)`, `pi`, `e`.
+- **Préfixe optionnel `=`** : force l'évaluation immédiate (ex: `= 42`, `= 2 + 2`).
+- **Productivité maximale au clavier** :
+  - `Entrée` : **Copie instantanément** le résultat dans le presse-papier Windows.
+  - `Tab` : **Réutilise le résultat** directement dans le champ de saisie pour enchaîner les calculs.
+
+### 5. Lancement Rapide du Terminal
 - Raccourci global `Alt` + `Entrée` géré nativement via l'API noyau `RegisterHotKey` (aucun conflit, réactivité instantanée).
 - Configurable dans `klypr.ini` via la clé `terminal` (ex: `wt.exe`, `powershell.exe`, `cmd.exe`, `bash.exe`...).
 - Chaîne de repli automatique robuste :
   `terminal défini` ➔ `Windows Terminal (wt.exe)` ➔ `Package Windows Terminal AppX` ➔ `PowerShell` ➔ `CMD`.
 
-### 5. Thèmes & Effets Visuels
+### 6. Thèmes & Effets Visuels
 - 5 thèmes intégrés :
   - **Système (Auto)** : s'adapte automatiquement au mode sombre / clair de Windows.
   - **Fluent Dark** : design sombre moderne translucide.
@@ -75,7 +86,7 @@ Contrôlez rapidement votre PC et votre session Windows directement depuis la ba
 - Effet Acrylic / Mica avec double-buffering GDI (rendu fluide et sans aucun scintillement).
 - Changement de thème directement depuis le lanceur en tapant `thème`.
 
-### 6. Lancement au Démarrage
+### 7. Lancement au Démarrage
 - Synchronisation native avec le registre Windows (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`).
 - Activé par défaut, désactivable via `klypr.ini` ou directement en tapant `démarrage` dans Klypr.
 
