@@ -1,6 +1,6 @@
 CC ?= gcc
 CFLAGS ?= -std=c11 -Wall -Wextra -Werror -Iinclude
-LDFLAGS ?= -mwindows -luser32 -lgdi32 -lshell32
+LDFLAGS ?= -mwindows -luser32 -lgdi32 -lshell32 -ladvapi32
 
 SRC = src/main.c \
       src/app.c \
