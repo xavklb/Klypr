@@ -7,7 +7,8 @@ SRC = src/main.c \
       src/config.c \
       src/input.c \
       src/launcher.c \
-      src/calc.c
+      src/calc.c \
+      src/tray.c
 
 OBJ = $(SRC:.c=.o)
 TARGET = klypr.exe

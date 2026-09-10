@@ -2,6 +2,7 @@
 #include "config.h"
 #include "input.h"
 #include "calc.h"
+#include "tray.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -2030,6 +2031,11 @@ static LRESULT CALLBACK launcher_wnd_proc(HWND hwnd, UINT uMsg, WPARAM wParam, L
         return 0;
     }
 
+    case WM_TRAY_NOTIFY: {
+        tray_handle_message(hwnd, wParam, lParam);
+        return 0;
+    }
+
     case WM_MOUSEMOVE: {
         int y = HIWORD(lParam);
         if (y >= BASE_HEIGHT && s_match_count > 0) {
@@ -2214,6 +2220,10 @@ static LRESULT CALLBACK launcher_wnd_proc(HWND hwnd, UINT uMsg, WPARAM wParam, L
     }
 
     default:
+        if (tray_get_taskbar_restart_msg() != 0 && uMsg == tray_get_taskbar_restart_msg()) {
+            tray_refresh();
+            return 0;
+        }
         break;
     }
 
@@ -2433,4 +2443,9 @@ bool launcher_is_visible(void)
 HWND launcher_get_hwnd(void)
 {
     return s_hwnd_launcher;
+}
+
+void launcher_refresh(void)
+{
+    index_all_applications();
 }

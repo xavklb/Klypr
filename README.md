@@ -8,15 +8,17 @@ Conçu pour une productivité maximale au clavier, il offre un design moderne tr
 
 ## Raccourcis Clavier Principaux
 
-| Raccourci | Action |
+| Raccourci / Action | Description |
 |---|---|
 | `Ctrl` + `A` | **Afficher / Masquer** la barre de lancement rapide |
 | `Alt` + `Entrée` | **Ouvrir le terminal** (configurable via `klypr.ini`, repli automatique intelligent) |
 | `Alt` + `Shift` + `Q` | **Quitter** proprement Klypr |
-| `Tab` | **Compléter** la commande ou l'alias sélectionné dans la barre de recherche |
+| `Tab` | **Compléter** la commande ou réutiliser le résultat de calcul |
 | `Haut` / `Bas` | **Naviguer** dans les résultats de recherche |
-| `Entrée` | **Valider** et exécuter l'action, l'application ou l'alias sélectionné |
+| `Entrée` | **Valider** et exécuter l'action, l'application ou copier le calcul |
 | `Échap` | **Fermer** la barre du lanceur |
+| `Clic gauche Systray` | **Afficher / Masquer** la barre de recherche |
+| `Clic droit Systray` | **Menu contextuel** (ouvrir, terminal, configuration, démarrage, quitter) |
 
 ---
 
@@ -90,6 +92,18 @@ Effectuez des calculs mathématiques en temps réel directement dans la barre de
 - Synchronisation native avec le registre Windows (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`).
 - Activé par défaut, désactivable via `klypr.ini` ou directement en tapant `démarrage` dans Klypr.
 
+### 8. Icône dans la Zone de Notification (Systray) & Menu Contextuel
+Klypr s'intègre discrètement et élégamment dans la zone de notification de la barre des tâches Windows :
+- **Icône dédiée haute définition** : badge moderne aux couleurs de Klypr s'adaptant à la résolution et au DPI de votre écran.
+- **Clic gauche ou double-clic** : affiche ou masque instantanément la barre de recherche (`Ctrl+A`).
+- **Clic droit (Menu contextuel complet)** :
+  - **Ouvrir Klypr** (`Ctrl+A`)
+  - **Ouvrir le terminal** (`Alt+Entrée`)
+  - **Éditer la configuration** (ouvre directement `klypr.ini` dans le Bloc-notes)
+  - **Lancer au démarrage de Windows** (case à cocher interactive pour basculer le lancement automatique)
+  - **Quitter Klypr** (`Alt+Shift+Q`)
+- **Résilience système (`TaskbarCreated`)** : réapparition automatique de l'icône sans redémarrage si l'Explorateur Windows plante ou redémarre.
+
 ---
 
 ## Configuration (`klypr.ini`)
@@ -134,15 +148,19 @@ proj = explorer.exe C:\Projets
 │       └── build.yml
 ├── include/
 │   ├── app.h          # Cycle de vie global de l'application
-│   ├── config.h       # Configuration générale (thèmes, opacité)
-│   ├── input.h        # Hooks clavier bas niveau WH_KEYBOARD_LL
-│   └── launcher.h     # Sélecteur d'application style terminal / barre rapide
+│   ├── calc.h         # Moteur de calcul mathématique instantané
+│   ├── config.h       # Configuration générale (thèmes, opacité, alias)
+│   ├── input.h        # Hooks clavier bas niveau WH_KEYBOARD_LL & hotkeys
+│   ├── launcher.h     # Barre de recherche, fuzzy search et rendu Acrylic
+│   └── tray.h         # Zone de notification (Systray) et menu contextuel
 ├── src/
 │   ├── app.c
+│   ├── calc.c
 │   ├── config.c
 │   ├── input.c
 │   ├── launcher.c
-│   └── main.c         # Point d'entrée WinMain
+│   ├── main.c         # Point d'entrée WinMain
+│   └── tray.c
 ├── .gitignore
 ├── CMakeLists.txt
 ├── Makefile

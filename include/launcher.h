@@ -12,6 +12,7 @@ void launcher_toggle(void);
 bool launcher_is_visible(void);
 HWND launcher_get_hwnd(void);
 void launcher_apply_theme(void);
+void launcher_refresh(void);
 
 #define WM_KLYPR_SHOW (WM_USER + 42)
 

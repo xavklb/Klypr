@@ -11,6 +11,7 @@ set(SOURCES
     src/input.c
     src/launcher.c
     src/calc.c
+    src/tray.c
 )
 
 add_executable(klypr WIN32 ${SOURCES})

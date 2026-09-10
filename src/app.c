@@ -2,6 +2,7 @@
 #include "config.h"
 #include "input.h"
 #include "launcher.h"
+#include "tray.h"
 #include <stdio.h>
 #include <windows.h>
 
@@ -65,6 +66,8 @@ bool app_init(void)
         return false;
     }
 
+    tray_init(launcher_get_hwnd());
+
     s_running = true;
 
     return true;
@@ -89,6 +92,7 @@ int app_run(void)
 void app_cleanup(void)
 {
     s_running = false;
+    tray_cleanup();
     input_cleanup();
     launcher_cleanup();
     config_cleanup();
