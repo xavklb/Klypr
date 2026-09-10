@@ -4,7 +4,8 @@
 
 AppConfig g_config = {
     .theme = THEME_SYSTEM,
-    .opacity = 95
+    .opacity = 95,
+    .autostart = true
 };
 
 static wchar_t s_ini_path[MAX_PATH] = {0};
@@ -23,6 +24,29 @@ static void init_ini_path(void)
     } else {
         wcsncpy(s_ini_path, L".\\klypr.ini", MAX_PATH - 1);
     }
+}
+
+static bool autostart_sync_registry(bool enable)
+{
+    HKEY hKey;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0, KEY_SET_VALUE, &hKey) != ERROR_SUCCESS) {
+        return false;
+    }
+
+    if (enable) {
+        wchar_t exe_path[MAX_PATH];
+        GetModuleFileNameW(NULL, exe_path, MAX_PATH);
+
+        wchar_t quoted_path[MAX_PATH + 4];
+        _snwprintf(quoted_path, sizeof(quoted_path) / sizeof(quoted_path[0]), L"\"%s\"", exe_path);
+
+        RegSetValueExW(hKey, L"Klypr", 0, REG_SZ, (const BYTE *)quoted_path, (DWORD)((wcslen(quoted_path) + 1) * sizeof(wchar_t)));
+    } else {
+        RegDeleteValueW(hKey, L"Klypr");
+    }
+
+    RegCloseKey(hKey);
+    return true;
 }
 
 const wchar_t *config_theme_to_string(ThemeType theme)
@@ -68,6 +92,9 @@ bool config_init(void)
 {
     init_ini_path();
 
+    g_config.autostart = GetPrivateProfileIntW(L"General", L"autostart", 1, s_ini_path) != 0;
+    autostart_sync_registry(g_config.autostart);
+
     g_config.opacity = GetPrivateProfileIntW(L"Theme", L"opacity", 95, s_ini_path);
 
     if (g_config.opacity < 50) g_config.opacity = 50;
@@ -86,6 +113,8 @@ void config_save(void)
 {
     init_ini_path();
 
+    WritePrivateProfileStringW(L"General", L"autostart", g_config.autostart ? L"1" : L"0", s_ini_path);
+
     WritePrivateProfileStringW(L"Theme", L"theme", config_theme_to_string(g_config.theme), s_ini_path);
 
     wchar_t num_buf[32];
@@ -99,6 +128,13 @@ void config_set_theme(ThemeType theme)
         theme = THEME_SYSTEM;
     }
     g_config.theme = theme;
+    config_save();
+}
+
+void config_set_autostart(bool enabled)
+{
+    g_config.autostart = enabled;
+    autostart_sync_registry(enabled);
     config_save();
 }
 

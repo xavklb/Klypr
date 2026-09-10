@@ -441,6 +441,13 @@ static void index_all_applications(void)
         add_app_entry(s_theme_actions[i].name, s_theme_actions[i].target, s_theme_actions[i].desc, true);
     }
 
+    // Autostart configuration action
+    if (g_config.autostart) {
+        add_app_entry(L"D\u00e9marrage: D\u00e9sactiver au d\u00e9marrage de Windows", L"__autostart:0", L"D\u00e9sactiver le lancement automatique", true);
+    } else {
+        add_app_entry(L"D\u00e9marrage: Activer au d\u00e9marrage de Windows", L"__autostart:1", L"Lancer Klypr au d\u00e9marrage de Windows", true);
+    }
+
     // 2. Start Menu shortcuts
     wchar_t prog_data[MAX_PATH];
     if (GetEnvironmentVariableW(L"ProgramData", prog_data, MAX_PATH) > 0) {
@@ -718,6 +725,14 @@ static void execute_command(const wchar_t *input)
         int theme_id = _wtoi(input + 8);
         config_set_theme((ThemeType)theme_id);
         launcher_apply_theme();
+        return;
+    }
+
+    // Check if this is an internal autostart switch action
+    if (wcsncmp(input, L"__autostart:", 12) == 0) {
+        bool enable = (input[12] == L'1');
+        config_set_autostart(enable);
+        index_all_applications();
         return;
     }
 

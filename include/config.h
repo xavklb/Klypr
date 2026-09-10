@@ -16,6 +16,7 @@ typedef enum {
 typedef struct {
     ThemeType theme;
     int opacity;
+    bool autostart;
 } AppConfig;
 
 extern AppConfig g_config;
@@ -23,6 +24,7 @@ extern AppConfig g_config;
 bool config_init(void);
 void config_cleanup(void);
 void config_set_theme(ThemeType theme);
+void config_set_autostart(bool enabled);
 void config_save(void);
 const wchar_t *config_theme_to_string(ThemeType theme);
 ThemeType config_string_to_theme(const wchar_t *str);

@@ -11,6 +11,7 @@ Conçu pour une productivité maximale au clavier, il offre un design moderne tr
 - **Recherche & Indexation instantanée** : détection automatique des applications installées (Menu Démarrer, registre `App Paths`, commandes système courantes).
 - **Navigation & URLs directes** : saisie directe d'adresses web ou de commandes système.
 - **Thèmes & Personnalisation** : support de plusieurs thèmes intégrés (`system`, `dark`, `light`, `cyberpunk`, `dracula`) et opacité réglable via fichier INI (`klypr.ini`) ou directement dans le lanceur.
+- **Lancement au démarrage** : synchronisation automatique avec le démarrage de Windows (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`), configurable dans `klypr.ini` ou via la barre.
 - **Contrôle au clavier** : interception globale via des hooks Windows de bas niveau.
 - **Raccourcis par défaut** :
   - `Ctrl` + `A` : Afficher / masquer la barre de lancement rapide.
